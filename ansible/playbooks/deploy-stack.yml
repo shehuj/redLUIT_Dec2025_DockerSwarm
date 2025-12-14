@@ -1,0 +1,19 @@
+---
+- name: Deploy stack to Swarm
+  hosts: swarm_manager
+  become: true
+  tasks:
+    - name: Copy stack file
+      copy:
+        src: "../../docker-stack.yml"
+        dest: /tmp/docker-stack.yml
+
+    - name: Deploy stack
+      command: docker stack deploy --compose-file /tmp/docker-stack.yml mystack
+
+    - name: Wait for stack services to be ready
+      command: docker service ls --filter label=com.docker.stack.namespace=mystack --format "{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}.Replicas{{ '}}' }}"
+      register: stack_status
+      until: stack_status.stdout_lines | select('search', '0/') | list | length == 0
+      retries: 30
+      delay: 10
