@@ -1,0 +1,23 @@
+---
+profile: production
+
+exclude_paths:
+  - .git/
+  - .github/
+  - configs/
+  - __pycache__/
+
+skip_list:
+  - yaml[line-length]
+  - no-changed-when
+  - command-instead-of-shell
+
+warn_list:
+  - experimental
+  - jinja[spacing]
+
+use_default_rules: true
+
+enable_list:
+  - name[casing]
+  - yaml[indentation]
