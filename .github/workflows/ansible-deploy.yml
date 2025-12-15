@@ -47,340 +47,147 @@ env:
   ANSIBLE_HOST_KEY_CHECKING: 'false'
 
 jobs:
-  # Job 1: Validate and Lint
+
+  # 1. Validate & Lint
   validate:
     name: Validate & Lint
     runs-on: ubuntu-latest
-    if: github.event.inputs.skip_tests != 'true'
+    if: ${{ inputs.skip_tests == false }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install Ansible and tools
-        run: |
+      - run: |
           pip install --upgrade pip
           pip install ansible ansible-lint yamllint molecule
 
       - name: Install Ansible Galaxy collections
         working-directory: ansible
-        run: |
-          ansible-galaxy collection install -r requirements.yml
+        run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Validate YAML files
-        run: |
-          yamllint -c .yamllint ansible/ docker-stack.yml configs/ || true
+      - run: yamllint -c .yamllint ansible/ docker-stack.yml configs/
 
-      - name: Run ansible-lint
+      - name: Ansible Lint
         working-directory: ansible
-        run: |
-          ansible-lint playbooks/ || true
+        run: ansible-lint playbooks/
 
-      - name: Validate Ansible syntax
+      - name: Ansible Syntax Check
         working-directory: ansible
         run: |
           for playbook in playbooks/*.yml; do
-            echo "Checking syntax: $playbook"
             ansible-playbook --syntax-check "$playbook" -i inventory.yml
           done
 
-      - name: Validate Docker Compose/Stack syntax
-        run: |
-          docker compose -f docker-stack.yml config > /dev/null
+      - name: Docker Stack config test
+        run: docker compose -f docker-stack.yml config
 
-  # Job 2: Security Scanning
+  # 2. Security Scan
   security:
     name: Security Scanning
     runs-on: ubuntu-latest
-    if: github.event.inputs.skip_tests != 'true'
+    if: ${{ inputs.skip_tests == false }}
+    needs: validate
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner (IaC)
+      - name: Trivy IaC Scan
         uses: aquasecurity/trivy-action@0.33.1
         with:
-          scan-type: 'config'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-iac-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          scan-type: config
+          format: sarif
+          output: trivy-iac-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
 
-      - name: Upload Trivy SARIF to GitHub Security
-        if: always()
+      - name: Upload SARIF findings
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-iac-results.sarif'
+          sarif_file: trivy-iac-results.sarif
 
-      - name: Scan for secrets with Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check for hardcoded credentials
-        run: |
-          echo "Scanning for hardcoded credentials..."
-          ! grep -r "password.*=.*['\"].*['\"]" ansible/ --include="*.yml" || echo "Warning: Found potential hardcoded passwords"
-          ! grep -r "secret.*=.*['\"].*['\"]" ansible/ --include="*.yml" || echo "Warning: Found potential hardcoded secrets"
+      - run: |
+          grep -R "password.*=.*['\"].*['\"]" ansible/ || true
+          grep -R "secret.*=.*['\"].*['\"]" ansible/ || true
 
-  # Job 3: Test Ansible Playbooks (Dry Run)
+  # 3. Dry-Run Test
   test:
     name: Test Playbooks (Dry Run)
     runs-on: ubuntu-latest
-    needs: [validate]
-    if: github.event.inputs.skip_tests != 'true'
+    needs: [validate, security]
+    if: ${{ inputs.skip_tests == false }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Ansible
-        run: |
-          pip install ansible
+      - run: pip install ansible
 
-      - name: Install Ansible Galaxy collections
+      - name: Run Ansible in check mode
         working-directory: ansible
         run: |
-          ansible-galaxy collection install -r requirements.yml
+          ansible-playbook playbooks/install-docker.yml -i inventory.yml --check --diff
+          ansible-playbook playbooks/swarm-setup.yml -i inventory.yml --check --diff
+          ansible-playbook playbooks/deploy-stack.yml -i inventory.yml --check --diff
 
-      - name: Test playbooks with --check mode
-        working-directory: ansible
-        run: |
-          echo "Testing install-docker.yml"
-          ansible-playbook playbooks/install-docker.yml -i inventory.yml --check --diff || true
-
-          echo "Testing swarm-setup.yml"
-          ansible-playbook playbooks/swarm-setup.yml -i inventory.yml --check --diff || true
-
-          echo "Testing deploy-stack.yml"
-          ansible-playbook playbooks/deploy-stack.yml -i inventory.yml --check --diff || true
-
-  # Job 4: Build Test Environment
-  build:
-    name: Build & Test
-    runs-on: ubuntu-latest
-    needs: [validate, security]
-    if: github.event_name == 'pull_request' && github.event.inputs.skip_tests != 'true'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Validate Docker Stack file
-        run: |
-          docker compose -f docker-stack.yml config --quiet
-
-      - name: Build test images (if Dockerfiles exist)
-        run: |
-          echo "Docker stack validation completed successfully"
-
-      - name: Generate test report
-        run: |
-          cat > test-report.md << 'EOF'
-          ## 🧪 Test Results
-
-          ### ✅ Validation
-          - Ansible syntax check: Passed
-          - YAML lint: Passed
-          - Docker stack validation: Passed
-
-          ### 🔒 Security
-          - Trivy IaC scan: Completed
-          - Secret scanning: Completed
-          - Credential check: Passed
-
-          ### 📋 Summary
-          All pre-deployment checks passed successfully.
-          EOF
-
-      - name: Comment PR with test results
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const report = fs.readFileSync('test-report.md', 'utf8');
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: report
-            });
-
-  # Job 5: Deploy to Swarm
+  # 4. Deploy
   deploy:
     name: Deploy to Docker Swarm
     runs-on: ubuntu-latest
     needs: [validate, security, test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.skip_tests == false
     environment:
-      name: production
+      name: ${{ inputs.environment }}
       url: http://${{ secrets.SWARM_MANAGER_IP }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Ansible
-        run: |
-          pip install ansible boto3 botocore
+      - run: pip install ansible boto3 botocore
 
-      - name: Install Ansible Galaxy collections
-        working-directory: ansible
-        run: |
-          ansible-galaxy collection install -r requirements.yml
-
-      - name: Configure SSH
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts || true
+          ssh-keyscan ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
 
-      - name: Configure AWS credentials (for EC2 dynamic inventory)
-        if: vars.USE_AWS_INVENTORY == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Test Ansible connectivity
-        working-directory: ansible
-        run: |
-          ansible all -i inventory.yml -m ping
-
-      - name: Install Docker on nodes
+      - name: Ansible Deploy
         working-directory: ansible
         run: |
           ansible-playbook playbooks/install-docker.yml -i inventory.yml
-
-      - name: Set up Docker Swarm
-        working-directory: ansible
-        run: |
           ansible-playbook playbooks/swarm-setup.yml -i inventory.yml
-
-      - name: Create Docker secrets
-        working-directory: ansible
-        run: |
-          ansible swarm_manager -i inventory.yml -b -m shell -a "
-            echo '${{ secrets.API_SECRET_KEY }}' | docker secret create api_secret_key - || true
-            echo '${{ secrets.GRAFANA_ADMIN_PASSWORD }}' | docker secret create grafana_admin_password - || true
-          "
-
-      - name: Deploy stack to Swarm
-        working-directory: ansible
-        run: |
           ansible-playbook playbooks/deploy-stack.yml -i inventory.yml
 
-      - name: Wait for deployment to stabilize
-        run: sleep 30
-
-      - name: Run post-deployment tests
-        working-directory: ansible
-        run: |
-          ansible-playbook playbooks/test-swarm.yml -i inventory.yml
-
-      - name: Get deployment summary
-        working-directory: ansible
-        run: |
-          ansible swarm_manager -i inventory.yml -b -m shell -a "docker service ls" > deployment-summary.txt
-          cat deployment-summary.txt
-
-      - name: Upload deployment artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deployment-logs
-          path: |
-            ansible/*.log
-            deployment-summary.txt
-
-      - name: Notify deployment status
-        if: always()
-        run: |
-          if [ ${{ job.status }} == 'success' ]; then
-            echo "✅ Deployment completed successfully"
-          else
-            echo "❌ Deployment failed"
-            exit 1
-          fi
-
-  # Job 6: Post-Deployment Verification
+  # 5. Post-deployment Verify
   verify:
     name: Verify Deployment
     runs-on: ubuntu-latest
-    needs: [deploy]
+    needs: deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Health check - Web service
-        run: |
-          curl -f http://${{ secrets.SWARM_MANAGER_IP }}/health || exit 1
+      - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}/health
 
-      - name: Health check - Prometheus
-        run: |
-          curl -f http://${{ secrets.SWARM_MANAGER_IP }}:9090/-/healthy || exit 1
+      - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}:9090/-/healthy
 
-      - name: Health check - Grafana
-        run: |
-          curl -f http://${{ secrets.SWARM_MANAGER_IP }}:3000/api/health || exit 1
-
-      - name: Health check - Visualizer
-        run: |
-          curl -f http://${{ secrets.SWARM_MANAGER_IP }}:8080 || exit 1
-
-      - name: Generate deployment report
-        if: always()
-        run: |
-          cat > deployment-report.md << 'EOF'
-          ## 🚀 Deployment Report
-
-          **Status**: ${{ job.status }}
-          **Environment**: Production
-          **Commit**: ${{ github.sha }}
-          **Deployed by**: ${{ github.actor }}
-
-          ### Service Health Checks
-          - ✅ Web Service: Healthy
-          - ✅ Prometheus: Healthy
-          - ✅ Grafana: Healthy
-          - ✅ Visualizer: Healthy
-
-          ### Access URLs
-          - Web: http://${{ secrets.SWARM_MANAGER_IP }}
-          - Prometheus: http://${{ secrets.SWARM_MANAGER_IP }}:9090
-          - Grafana: http://${{ secrets.SWARM_MANAGER_IP }}:3000
-          - Visualizer: http://${{ secrets.SWARM_MANAGER_IP }}:8080
-          EOF
-
-          cat deployment-report.md
-
-      - name: Upload deployment report
-        uses: actions/upload-artifact@v4
-        with:
-          name: deployment-report
-          path: deployment-report.md
+      - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}:3000/api/health
