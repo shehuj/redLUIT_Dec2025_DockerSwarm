@@ -2,7 +2,7 @@ name: Docker Swarm CI/CD Pipeline
 
 on:
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
@@ -10,7 +10,7 @@ on:
       - '.github/workflows/ansible-deploy.yml'
 
   push:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
