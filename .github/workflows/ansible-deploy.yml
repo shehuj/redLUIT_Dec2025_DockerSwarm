@@ -10,7 +10,7 @@ on:
       - '.github/workflows/ansible-deploy.yml'
 
   push:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
