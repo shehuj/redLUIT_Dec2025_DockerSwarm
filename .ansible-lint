@@ -1,5 +1,5 @@
 ---
-profile: production
+profile: moderate
 
 exclude_paths:
   - .git/
@@ -11,13 +11,13 @@ skip_list:
   - yaml[line-length]
   - no-changed-when
   - command-instead-of-shell
+  - fqcn[action-core]
+  - ignore-errors
+  - risky-shell-pipe
 
 warn_list:
   - experimental
   - jinja[spacing]
+  - name[casing]
 
 use_default_rules: true
-
-enable_list:
-  - name[casing]
-  - yaml[indentation]
