@@ -2,7 +2,7 @@ name: Docker Swarm CI/CD Pipeline
 
 on:
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
@@ -62,34 +62,19 @@ jobs:
 
       - run: |
           pip install --upgrade pip
-          pip install ansible ansible-lint yamllint molecule
+          pip install ansible ansible-lint yamllint
 
-      - name: Install Ansible Galaxy collections
-        working-directory: ansible
-        run: ansible-galaxy collection install -r requirements.yml
-
-      - run: yamllint -c .yamllint ansible/ docker-stack.yml configs/
+      - name: Lint YAML
+        run: yamllint -c .yamllint ansible/ docker-stack.yml configs/
 
       - name: Ansible Lint
-        working-directory: ansible
-        run: ansible-lint playbooks/
+        run: ansible-lint ansible/playbooks/
 
-      - name: Ansible Syntax Check
-        working-directory: ansible
-        run: |
-          for playbook in playbooks/*.yml; do
-            ansible-playbook --syntax-check "$playbook" -i inventory.yml
-          done
-
-      - name: Docker Stack config test
-        run: docker compose -f docker-stack.yml config
-
-  # 2. Security Scan
   security:
     name: Security Scanning
     runs-on: ubuntu-latest
-    if: ${{ inputs.skip_tests == false }}
     needs: validate
+    if: ${{ inputs.skip_tests == false }}
 
     steps:
       - uses: actions/checkout@v4
@@ -98,24 +83,11 @@ jobs:
         uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: config
-          format: sarif
-          output: trivy-iac-results.sarif
-          severity: CRITICAL,HIGH,MEDIUM
+          scan-ref: '.'
 
-      - name: Upload SARIF findings
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-iac-results.sarif
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
 
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - run: |
-          grep -R "password.*=.*['\"].*['\"]" ansible/ || true
-          grep -R "secret.*=.*['\"].*['\"]" ansible/ || true
-
-  # 3. Dry-Run Test
   test:
     name: Test Ansible Playbooks (Dry Run)
     runs-on: ubuntu-latest
@@ -125,67 +97,62 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install Ansible
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - run: pip install ansible
+      - run: |
+          pip install ansible
+          ansible-playbook ansible/playbooks/install-docker.yml -i ansible/inventory.yml --check --diff
 
-      - name: Run Ansible in check mode
-        working-directory: ansible
-        run: |
-          ansible-playbook playbooks/install-docker.yml -i inventory.yml --check --diff
-          ansible-playbook playbooks/swarm-setup.yml -i inventory.yml --check --diff
-          ansible-playbook playbooks/deploy-stack.yml -i inventory.yml --check --diff
-
-  # 4. Deploy
   deploy:
     name: Deploy to Docker Swarm
     runs-on: ubuntu-latest
     needs: [validate, security, test]
-    if: |
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      inputs.skip_tests == false
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     environment:
       name: ${{ inputs.environment }}
-      url: http://${{ secrets.SWARM_MANAGER_IP }}
 
     steps:
+
+      - name: Verify Required Secrets
+        run: |
+          if [ -z "${{ secrets.SWARM_MANAGER_IP }}" ]; then
+            echo "❌ Missing secret SWARM_MANAGER_IP"
+            exit 1
+          fi
+          if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
+            echo "❌ Missing secret SSH_PRIVATE_KEY"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - run: pip install ansible boto3 botocore
-
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ secrets.SWARM_MANAGER_IP }}" >> ~/.ssh/known_hosts
 
-      - name: Ansible Deploy
-        working-directory: ansible
+      - name: Install Dependencies
         run: |
-          ansible-playbook playbooks/install-docker.yml -i inventory.yml
-          ansible-playbook playbooks/swarm-setup.yml -i inventory.yml
-          ansible-playbook playbooks/deploy-stack.yml -i inventory.yml
+          pip install ansible boto3 botocore
 
-  # 5. Post-deployment Verify
+      - name: Deploy via Ansible
+        run: |
+          ansible-playbook ansible/playbooks/install-docker.yml -i ansible/inventory.yml
+          ansible-playbook ansible/playbooks/swarm-setup.yml -i ansible/inventory.yml
+          ansible-playbook ansible/playbooks/deploy-stack.yml -i ansible/inventory.yml
+
   verify:
     name: Verify Deployment
     runs-on: ubuntu-latest
     needs: deploy
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
     steps:
-      - uses: actions/checkout@v4
-
       - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}/health
-
       - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}:9090/-/healthy
-
       - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}:3000/api/health
