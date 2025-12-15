@@ -155,4 +155,5 @@ jobs:
     steps:
       - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}/health
       - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}:9090/-/healthy
+
       - run: curl -f http://${{ secrets.SWARM_MANAGER_IP }}:3000/api/health
