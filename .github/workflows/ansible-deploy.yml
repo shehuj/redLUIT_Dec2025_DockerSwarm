@@ -59,18 +59,14 @@ jobs:
     if: ${{ inputs.skip_tests == false }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - run: |
           pip install --upgrade pip
           pip install ansible ansible-lint yamllint
-
       - name: Lint YAML
         run: yamllint -c .yamllint ansible/ docker-stack.yml configs/
-
       - name: Ansible Lint
         run: ansible-lint ansible/playbooks/
 
@@ -81,9 +77,6 @@ jobs:
     if: ${{ inputs.skip_tests == false }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Trivy IaC Scan
         uses: aquasecurity/trivy-action@0.33.1
         with:
@@ -102,7 +95,6 @@ jobs:
     if: ${{ inputs.skip_tests == false }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Ansible
         uses: actions/setup-python@v5
         with:
@@ -124,14 +116,14 @@ jobs:
     name: Deploy to Docker Swarm
     needs: [validate, security, test]
     runs-on: ubuntu-latest
-
-    # Only deploy when a branch is pushed to main (i.e., after merge)
     if: |
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
-
-    environment: production
-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (
+        github.ref == 'refs/heads/main' ||
+        github.ref == 'refs/heads/dev'
+      ))
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
     steps:
 
       - name: Verify Required Secrets
@@ -175,8 +167,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
-
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     steps:
       - run: curl -f http://${{ env.SWARM_MANAGER_IP }}/health
       - run: curl -f http://${{ env.SWARM_MANAGER_IP }}:9090/-/healthy
