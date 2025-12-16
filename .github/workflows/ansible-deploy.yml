@@ -214,6 +214,12 @@ jobs:
         run: |
           pip install ansible boto3 botocore
 
+      - name: Write SSH private key to file
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
       - name: Deploy via Ansible
         run: |
           ansible-playbook -i ansible/inventory.yml \
