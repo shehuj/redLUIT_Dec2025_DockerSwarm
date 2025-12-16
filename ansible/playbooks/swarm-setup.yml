@@ -1,37 +1,36 @@
 ---
-- name: Initialize Docker Swarm manager
+- name: Initialize Docker Swarm Manager
   hosts: swarm_manager
   become: true
   vars:
     ansible_python_interpreter: /usr/bin/python3
 
   tasks:
-
-    - name: Ensure Docker SDK for Python is installed
+    - name: Ensure Docker SDK for Python Is Installed
       ansible.builtin.pip:
         name: docker
         executable: pip3
         state: present
 
-    - name: Check if Swarm is already initialized
+    - name: Check If Swarm Is Already Initialized
       ansible.builtin.command: >
         docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
       register: swarm_status
       changed_when: false
       failed_when: false
 
-    - name: Get private IP address
+    - name: Set Manager Private IP Address
       ansible.builtin.set_fact:
         private_ip: "{{ ansible_facts.default_ipv4.address }}"
 
-    - name: Initialize Swarm on manager
+    - name: Initialize Swarm on Manager Node
       community.docker.docker_swarm:
         state: present
         advertise_addr: "{{ private_ip }}"
       when: swarm_status.stdout != "active"
       register: swarm_init
 
-    - name: Wait for manager to become ready
+    - name: Wait Until Manager Node Is Ready
       ansible.builtin.command: docker node ls
       register: node_check
       until: node_check.rc == 0
@@ -40,20 +39,20 @@
       when: swarm_init is changed
       changed_when: false
 
-    - name: Get Swarm info (tokens, etc.)
+    - name: Fetch Swarm Information
       community.docker.docker_swarm_info:
       register: swarm_info
 
-    - name: Set worker join token
+    - name: Set Worker Join Token
       ansible.builtin.set_fact:
         worker_join_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
         manager_addr: "{{ private_ip }}"
 
-    - name: Set manager join token
+    - name: Set Manager Join Token
       ansible.builtin.set_fact:
         manager_join_token: "{{ swarm_info.swarm_facts.JoinTokens.Manager }}"
 
-    - name: Display Swarm manager status
+    - name: Show Swarm Manager Status
       ansible.builtin.debug:
         msg:
           - "Swarm initialized"
@@ -61,47 +60,43 @@
           - "Worker join token: {{ worker_join_token }}"
           - "Manager join token: {{ manager_join_token }}"
 
----
-
-- name: Join workers to the Swarm
+- name: Join Worker Nodes to Swarm
   hosts: swarm_workers
   become: true
   vars:
     ansible_python_interpreter: /usr/bin/python3
 
   tasks:
-
-    - name: Ensure Docker SDK for Python is installed
+    - name: Ensure Docker SDK for Python Is Installed on Worker
       ansible.builtin.pip:
         name: docker
         executable: pip3
         state: present
 
-    - name: Check if already part of Swarm
+    - name: Check If Worker Is Already Part of Swarm
       ansible.builtin.command: >
         docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
       register: worker_swarm_status
       changed_when: false
       failed_when: false
 
-    - name: Leave Swarm if in incorrect state
+    - name: Force Leave Swarm if Already Active
       ansible.builtin.command: docker swarm leave --force
-      when:
-        - worker_swarm_status.stdout == "active"
+      when: worker_swarm_status.stdout == "active"
       ignore_errors: yes
 
-    - name: Retrieve worker join token from manager using docker_swarm_info
+    - name: Retrieve Worker Join Token from Manager
       community.docker.docker_swarm_info:
       delegate_to: "{{ groups['swarm_manager'][0] }}"
       run_once: true
       register: token_info
 
-    - name: Save worker token locally
+    - name: Set Worker Token Variables Locally
       ansible.builtin.set_fact:
         worker_join_token: "{{ token_info.swarm_facts.JoinTokens.Worker }}"
         manager_addr: "{{ hostvars[groups['swarm_manager'][0]]['ansible_facts']['default_ipv4']['address'] }}"
 
-    - name: Join worker to Swarm cluster
+    - name: Join Worker to Swarm Cluster
       community.docker.docker_swarm:
         state: join
         advertise_addr: "{{ ansible_facts.default_ipv4.address }}"
@@ -110,33 +105,30 @@
           - "{{ manager_addr }}:2377"
       when: worker_swarm_status.stdout != "active"
 
----
-
-- name: Verify Swarm cluster
+- name: Verify Swarm Cluster
   hosts: swarm_manager
   become: true
   vars:
     ansible_python_interpreter: /usr/bin/python3
 
   tasks:
-
-    - name: Get node list
+    - name: Retrieve Node List
       ansible.builtin.command: >
         docker node ls --format "{{ '{{' }}.Hostname{{ '}}' }} {{ '{{' }}.Status{{ '}}' }} {{ '{{' }}.ManagerStatus{{ '}}' }}"
       register: node_list
       changed_when: false
 
-    - name: Display cluster nodes
+    - name: Output Swarm Cluster Nodes
       ansible.builtin.debug:
         msg: "{{ node_list.stdout_lines }}"
 
-    - name: Verify expected number of nodes
+    - name: Assert Minimum Swarm Nodes Present
       ansible.builtin.assert:
         that: node_list.stdout_lines | length >= 2
         fail_msg: "Expected at least 2 nodes in the cluster"
         success_msg: "Swarm cluster has {{ node_list.stdout_lines | length }} nodes"
 
-    - name: Label worker nodes for app deployment
+    - name: Label Worker Nodes for Application Deployment
       ansible.builtin.command: >
         docker node update --label-add type=worker {{ item }}
       loop: "{{ groups['swarm_workers'] }}"
