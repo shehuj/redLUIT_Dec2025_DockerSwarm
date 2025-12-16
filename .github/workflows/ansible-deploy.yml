@@ -208,7 +208,8 @@ jobs:
 
       - name: Test SSH connectivity
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP echo "SSH OK"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP 
+          echo "SSH OK"
 
       - name: Install Dependencies
         run: |
