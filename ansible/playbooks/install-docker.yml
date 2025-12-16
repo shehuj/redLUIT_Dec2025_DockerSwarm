@@ -18,6 +18,7 @@
           - gnupg
           - lsb-release
         state: present
+        update_cache: true
 
     - name: Create APT Keyrings Directory
       ansible.builtin.file:
