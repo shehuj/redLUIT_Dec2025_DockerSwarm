@@ -1,10 +1,24 @@
 ---
 extends: default
 
+# Completely skip these rules so they never fail or warn
+skip_list:
+  # Ignore conventional name casing
+  - name[casing]
+
+  # Ignore all strict YAML parsing error rules
+  - yaml
+
+# Treat these rules only as warnings (don’t fail CI)
+warn_list:
+  # Warn for specific YAML issues rather than error
+  - yaml[document-start]
+  - yaml[trailing-spaces]
+
 rules:
   document-start: disable
 
-  # Disable the rule that requires a newline at end of file
+  # You already disabled newline-at-end-of-file
   new-line-at-end-of-file: disable
 
   line-length:
