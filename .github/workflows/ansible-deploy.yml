@@ -57,16 +57,21 @@ jobs:
     name: Validate & Lint
     runs-on: ubuntu-latest
     if: ${{ inputs.skip_tests == false }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - run: |
           pip install --upgrade pip
           pip install ansible ansible-lint yamllint
+
       - name: Lint YAML
         run: yamllint -c .yamllint ansible/ docker-stack.yml configs/
+
       - name: Ansible Lint
         run: ansible-lint ansible/playbooks/
 
@@ -75,8 +80,12 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     if: ${{ inputs.skip_tests == false }}
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Trivy IaC Scan
         uses: aquasecurity/trivy-action@0.33.1
         with:
@@ -93,8 +102,10 @@ jobs:
     needs: [validate, security]
     runs-on: ubuntu-latest
     if: ${{ inputs.skip_tests == false }}
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Ansible
         uses: actions/setup-python@v5
         with:
@@ -116,14 +127,15 @@ jobs:
     name: Deploy to Docker Swarm
     needs: [validate, security, test]
     runs-on: ubuntu-latest
+
+    # Only deploy on push to main or workflow_dispatch input
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && (
-        github.ref == 'refs/heads/main' ||
-        github.ref == 'refs/heads/dev'
-      ))
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+
     steps:
 
       - name: Verify Required Secrets
@@ -144,17 +156,15 @@ jobs:
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
-          # Start ssh-agent and add the key
           eval "$(ssh-agent -s)"
-          printf "%s\n" "$SSH_PRIVATE_KEY" | ssh-add -
+          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
 
-          # Add host to known_hosts
           ssh-keyscan -H "$SWARM_MANAGER_IP" >> ~/.ssh/known_hosts
-
 
       - name: Test SSH connectivity
         run: |
-          nc -zvw5 $SWARM_MANAGER_IP 22 || echo "✖ Port 22 unreachable"    
+          nc -zvw5 $SWARM_MANAGER_IP 22 || echo "✖ Port 22 unreachable"
+
       - name: Install Dependencies
         run: |
           pip install ansible boto3 botocore
@@ -169,9 +179,11 @@ jobs:
     name: Verify Deployment
     needs: deploy
     runs-on: ubuntu-latest
+
     if: |
       github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+      github.ref == 'refs/heads/main'
+
     steps:
       - run: curl -f http://${{ env.SWARM_MANAGER_IP }}/health
       - run: curl -f http://${{ env.SWARM_MANAGER_IP }}:9090/-/healthy
