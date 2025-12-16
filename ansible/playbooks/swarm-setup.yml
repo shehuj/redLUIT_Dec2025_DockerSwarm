@@ -112,6 +112,19 @@
         worker_join_token: "{{ token_info.swarm_facts.JoinTokens.Worker }}"
         manager_addr: "{{ hostvars[groups['swarm_manager'][0]]['ansible_facts']['default_ipv4']['address'] }}"
 
+    - name: Verify Network Connectivity to Manager on Port 2377
+      ansible.builtin.wait_for:
+        host: "{{ manager_addr }}"
+        port: 2377
+        timeout: 30
+        state: started
+      when: worker_swarm_status.stdout != "active"
+
+    - name: Wait After Leaving Swarm Before Rejoining
+      ansible.builtin.pause:
+        seconds: 5
+      when: worker_swarm_status.stdout == "active"
+
     - name: Join Worker to Swarm Cluster
       community.docker.docker_swarm:
         state: join
@@ -119,7 +132,21 @@
         join_token: "{{ worker_join_token }}"
         remote_addrs:
           - "{{ manager_addr }}:2377"
+        timeout: 60
+      register: swarm_join_result
+      retries: 3
+      delay: 10
+      until: swarm_join_result is succeeded
       when: worker_swarm_status.stdout != "active"
+
+    - name: Verify Worker Successfully Joined Swarm
+      ansible.builtin.command: >
+        docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
+      register: final_swarm_status
+      until: final_swarm_status.stdout == "active"
+      retries: 5
+      delay: 3
+      changed_when: false
 
 - name: Verify Swarm Cluster
   hosts: swarm_manager
