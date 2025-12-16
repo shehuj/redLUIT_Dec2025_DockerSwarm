@@ -18,6 +18,7 @@
         name: docker
         executable: pip3
         state: present
+        break_system_packages: true
 
     - name: Check If Swarm Is Already Initialized
       ansible.builtin.command: >
@@ -79,6 +80,7 @@
         name: docker
         executable: pip3
         state: present
+        break_system_packages: true
 
     - name: Check If Worker Is Already Part of Swarm
       ansible.builtin.command: >
