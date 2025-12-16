@@ -11,11 +11,11 @@ all:
         worker1:
           ansible_host: 34.201.35.72
           ansible_user: ubuntu
-          ansible_ssh_private_key_file: ${{ 
+          ansible_ssh_private_key_file: ~/Desktop/keys/key.pem
         worker2:
           ansible_host: 44.192.112.155
           ansible_user: ubuntu
-          ansible_ssh_private_key_file: env.key.pem
+          ansible_ssh_private_key_file: ~/Desktop/keys/key.pem
 
         worker3:
           ansible_host: 18.205.1.72
