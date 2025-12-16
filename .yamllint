@@ -4,6 +4,9 @@ extends: default
 rules:
   document-start: disable
 
+  # Disable the rule that requires a newline at end of file
+  new-line-at-end-of-file: disable
+
   line-length:
     max: 160
     level: warning
@@ -15,6 +18,7 @@ rules:
   comments:
     min-spaces-from-content: 1
   comments-indentation: false
+
   octal-values:
     forbid-implicit-octal: true
     forbid-explicit-octal: true
