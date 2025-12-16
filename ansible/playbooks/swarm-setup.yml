@@ -99,7 +99,23 @@
     - name: Force Leave Swarm if Already Active
       ansible.builtin.command: docker swarm leave --force
       when: worker_swarm_status.stdout == "active"
-      ignore_errors: true
+      register: leave_result
+      failed_when: false
+
+    - name: Wait for Swarm Leave to Complete
+      ansible.builtin.pause:
+        seconds: 5
+      when: worker_swarm_status.stdout == "active"
+
+    - name: Verify Worker Left Swarm Successfully
+      ansible.builtin.command: >
+        docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
+      register: post_leave_status
+      until: post_leave_status.stdout == "inactive"
+      retries: 3
+      delay: 2
+      changed_when: false
+      when: worker_swarm_status.stdout == "active"
 
     - name: Retrieve Worker Join Token from Manager
       community.docker.docker_swarm_info:
@@ -118,12 +134,23 @@
         port: 2377
         timeout: 30
         state: started
-      when: worker_swarm_status.stdout != "active"
 
-    - name: Wait After Leaving Swarm Before Rejoining
+    - name: Re-check Swarm Status Before Join
+      ansible.builtin.command: >
+        docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
+      register: current_swarm_status
+      changed_when: false
+
+    - name: Force Leave if Still in Swarm After Previous Checks
+      ansible.builtin.command: docker swarm leave --force
+      when: current_swarm_status.stdout == "active"
+      register: final_leave
+      failed_when: false
+
+    - name: Brief Wait After Final Leave
       ansible.builtin.pause:
-        seconds: 5
-      when: worker_swarm_status.stdout == "active"
+        seconds: 3
+      when: current_swarm_status.stdout == "active"
 
     - name: Join Worker to Swarm Cluster
       community.docker.docker_swarm:
@@ -137,7 +164,15 @@
       retries: 3
       delay: 10
       until: swarm_join_result is succeeded
-      when: worker_swarm_status.stdout != "active"
+
+    - name: Verify Worker Successfully Joined Swarm
+      ansible.builtin.command: >
+        docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
+      register: final_swarm_status
+      until: final_swarm_status.stdout == "active"
+      retries: 5
+      delay: 3
+      changed_when: false
 
     - name: Verify Worker Successfully Joined Swarm
       ansible.builtin.command: >
