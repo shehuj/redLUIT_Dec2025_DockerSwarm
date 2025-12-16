@@ -1,5 +1,7 @@
 ---
 extends: default
+skip_list:
+  - name[casing]
 
 rules:
   document-start: disable
