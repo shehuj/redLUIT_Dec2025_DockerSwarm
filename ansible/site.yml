@@ -1,0 +1,57 @@
+---
+# Master playbook for complete Docker Swarm deployment
+- name: Complete Docker Swarm Deployment
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display Deployment Start
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Docker Swarm Deployment Starting"
+          - "========================================="
+          - "This will:"
+          - "  1. Install Docker on all nodes"
+          - "  2. Initialize Docker Swarm"
+          - "  3. Deploy application stack"
+          - "  4. Verify deployment"
+          - "========================================="
+
+# Phase 1: Install Docker on all nodes
+- name: Phase 1 - Install Docker
+  ansible.builtin.import_playbook: playbooks/install-docker.yml
+
+# Phase 2: Setup Docker Swarm
+- name: Phase 2 - Initialize Swarm
+  ansible.builtin.import_playbook: playbooks/swarm-setup.yml
+
+# Phase 3: Deploy Application Stack
+- name: Phase 3 - Deploy Stack
+  ansible.builtin.import_playbook: playbooks/deploy-stack.yml
+
+# Phase 4: Verify Deployment
+- name: Phase 4 - Verify Deployment
+  ansible.builtin.import_playbook: playbooks/test-swarm.yml
+
+# Final Summary
+- name: Deployment Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display Deployment Complete
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   ✅ Docker Swarm Deployment Complete!"
+          - "========================================="
+          - ""
+          - "Access your services:"
+          - "  • Web:        http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}"
+          - "  • Prometheus: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9090"
+          - "  • Grafana:    http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:3000"
+          - "  • Visualizer: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:8080"
+          - ""
+          - "Default credentials:"
+          - "  • Grafana: admin / change-me-in-production"
+          - ""
+          - "========================================="

@@ -1,19 +1,61 @@
 ---
-- name: Deploy stack to Swarm
+- name: Deploy Stack to Swarm
   hosts: swarm_manager
   become: true
+
   tasks:
-    - name: Copy stack file
-      copy:
+    - name: Copy Stack File to Manager
+      ansible.builtin.copy:
         src: "../../docker-stack.yml"
         dest: /tmp/docker-stack.yml
+        mode: '0644'
 
-    - name: Deploy stack
-      command: docker stack deploy --compose-file /tmp/docker-stack.yml mystack
+    - name: Copy Config Files to Manager
+      ansible.builtin.copy:
+        src: "../../configs/"
+        dest: /tmp/configs/
+        mode: '0644'
 
-    - name: Wait for stack services to be ready
-      command: docker service ls --filter label=com.docker.stack.namespace=mystack --format "{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}.Replicas{{ '}}' }}"
+    - name: Create Docker Secrets if Not Exist
+      ansible.builtin.shell: |
+        if ! docker secret ls | grep -q api_secret_key; then
+          echo "change-me-in-production" | docker secret create api_secret_key -
+        fi
+        if ! docker secret ls | grep -q grafana_admin_password; then
+          echo "change-me-in-production" | docker secret create grafana_admin_password -
+        fi
+      changed_when: false
+      failed_when: false
+
+    - name: Deploy Docker Stack
+      ansible.builtin.command: >
+        docker stack deploy
+        --compose-file /tmp/docker-stack.yml
+        --with-registry-auth
+        mystack
+      register: stack_deploy
+      changed_when: "'Creating' in stack_deploy.stdout or 'Updating' in stack_deploy.stdout"
+
+    - name: Wait for Stack Services to Start
+      ansible.builtin.command: >
+        docker service ls
+        --filter label=com.docker.stack.namespace=mystack
+        --format "{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}.Replicas{{ '}}' }}"
       register: stack_status
       until: stack_status.stdout_lines | select('search', '0/') | list | length == 0
       retries: 30
       delay: 10
+      changed_when: false
+
+    - name: Display Stack Services Status
+      ansible.builtin.debug:
+        msg: "{{ stack_status.stdout_lines }}"
+
+    - name: Verify Stack Deployment
+      ansible.builtin.command: docker stack ps mystack --no-trunc
+      register: stack_ps
+      changed_when: false
+
+    - name: Show Stack Tasks
+      ansible.builtin.debug:
+        msg: "{{ stack_ps.stdout_lines }}"
