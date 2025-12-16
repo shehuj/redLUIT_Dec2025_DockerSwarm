@@ -60,7 +60,6 @@
           - "Manager advertise address: {{ private_ip }}"
           - "Worker join token: {{ worker_join_token }}"
           - "Manager join token: {{ manager_join_token }}"
-          
 - name: Join workers to the Swarm
   hosts: swarm_workers
   become: true
