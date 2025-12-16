@@ -90,8 +90,27 @@ jobs:
           scan-type: config
           scan-ref: '.'
 
-      - name: Gitleaks Scan
-        uses: gitleaks/gitleaks-action@v2
+security:
+  name: Security Scanning
+  runs-on: ubuntu-latest
+  needs: validate
+  if: ${{ inputs.skip_tests == false }}
+
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Trivy IaC Scan
+      uses: aquasecurity/trivy-action@0.33.1
+      with:
+        scan-type: config
+        scan-ref: '.'
+
+    - name: Gitleaks Scan
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test:
     name: Test Ansible Playbooks (Syntax Check)
