@@ -83,7 +83,7 @@
     - name: Force Leave Swarm if Already Active
       ansible.builtin.command: docker swarm leave --force
       when: worker_swarm_status.stdout == "active"
-      ignore_errors: yes
+      ignore_errors: true
 
     - name: Retrieve Worker Join Token from Manager
       community.docker.docker_swarm_info:
