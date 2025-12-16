@@ -3,21 +3,25 @@ all:
     swarm_manager:
       hosts:
         manager:
+          ansible_python_interpreter: /usr/bin/python3
           ansible_host: 35.170.71.14
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
     swarm_workers:
       hosts:
         worker1:
+          ansible_python_interpreter: /usr/bin/python3
           ansible_host: 34.201.35.72
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
         worker2:
+          ansible_python_interpreter: /usr/bin/python3
           ansible_host: 44.192.112.155
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
 
         worker3:
+          ansible_python_interpreter: /usr/bin/python3
           ansible_host: 18.205.1.72
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
