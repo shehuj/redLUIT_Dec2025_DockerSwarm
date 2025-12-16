@@ -26,12 +26,11 @@
         state: directory
         mode: '0755'
 
-    - name: Download and install Docker GPG Key
-      ansible.builtin.shell: |
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
-          --dearmor -o /etc/apt/keyrings/docker.gpg
-      args:
-        creates: /etc/apt/keyrings/docker.gpg
+    - name: Download Docker GPG key for apt
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
 
     - name: Ensurer Docker GPG Key is Readable
       ansible.builtin.file:
