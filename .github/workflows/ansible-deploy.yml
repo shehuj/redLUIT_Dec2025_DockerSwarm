@@ -159,6 +159,10 @@ jobs:
           # Add host to known_hosts
           ssh-keyscan -H "$SWARM_MANAGER_IP" >> ~/.ssh/known_hosts
 
+
+      - name: Test SSH connectivity
+        run: |
+          nc -zvw5 $SWARM_MANAGER_IP 22 || echo "✖ Port 22 unreachable"    
       - name: Install Dependencies
         run: |
           pip install ansible boto3 botocore
