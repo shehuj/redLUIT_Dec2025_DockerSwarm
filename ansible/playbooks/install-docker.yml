@@ -100,7 +100,11 @@
       changed_when: false
 
   handlers:
+<<<<<<< dev
     - name: Restart Docker
+=======
+    - name: restart docker
+>>>>>>> main
       ansible.builtin.service:
         name: docker
         state: restarted
