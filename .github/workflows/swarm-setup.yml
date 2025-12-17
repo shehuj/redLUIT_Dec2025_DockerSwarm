@@ -1,9 +1,29 @@
 name: Docker Swarm Setup
 
 # Builds Docker Swarm cluster and validates worker nodes and labels
-# Manual trigger only - infrastructure provisioning
+# - Dry run on PR (check mode)
+# - Actual deployment on merge to main
 
 on:
+  pull_request:
+    paths:
+      - 'ansible/playbooks/install-docker.yml'
+      - 'ansible/playbooks/swarm-setup.yml'
+      - 'ansible/playbooks/setup-exporters.yml'
+      - 'ansible/playbooks/test-exporters.yml'
+      - 'ansible/inventory.yml'
+      - '.github/workflows/swarm-setup.yml'
+
+  push:
+    branches: ["main"]
+    paths:
+      - 'ansible/playbooks/install-docker.yml'
+      - 'ansible/playbooks/swarm-setup.yml'
+      - 'ansible/playbooks/setup-exporters.yml'
+      - 'ansible/playbooks/test-exporters.yml'
+      - 'ansible/inventory.yml'
+      - '.github/workflows/swarm-setup.yml'
+
   workflow_dispatch:
     inputs:
       skip_docker_install:
@@ -21,8 +41,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: swarm-setup
-  cancel-in-progress: false
+  group: swarm-setup-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   ANSIBLE_FORCE_COLOR: 'true'
@@ -40,7 +60,10 @@ jobs:
   install-docker:
     name: Install Docker on All Nodes
     runs-on: ubuntu-latest
-    if: inputs.skip_docker_install == false
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.skip_docker_install == false)
 
     steps:
       - name: Verify Required Secrets
@@ -71,13 +94,26 @@ jobs:
           pip install ansible boto3 botocore
           ansible-galaxy collection install -r ansible/requirements.yml
 
-      - name: Install Docker on all nodes
+      - name: Install Docker on all nodes (Dry Run)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Running in check mode (no actual changes)..."
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            --check \
+            --diff \
+            ansible/playbooks/install-docker.yml || true
+          echo "✅ Dry run complete"
+
+      - name: Install Docker on all nodes (Actual)
+        if: github.event_name != 'pull_request'
         run: |
           ansible-playbook -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
             ansible/playbooks/install-docker.yml
 
       - name: Verify Docker installation
+        if: github.event_name != 'pull_request'
         run: |
           ansible all -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
@@ -108,7 +144,19 @@ jobs:
           pip install ansible boto3 botocore
           ansible-galaxy collection install -r ansible/requirements.yml
 
-      - name: Initialize Swarm and join workers
+      - name: Initialize Swarm and join workers (Dry Run)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Running in check mode (no actual changes)..."
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            --check \
+            --diff \
+            ansible/playbooks/swarm-setup.yml || true
+          echo "✅ Dry run complete"
+
+      - name: Initialize Swarm and join workers (Actual)
+        if: github.event_name != 'pull_request'
         run: |
           ansible-playbook -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
@@ -124,7 +172,8 @@ jobs:
     if: |
       always() &&
       needs.initialize-swarm.result == 'success' &&
-      inputs.skip_validation == false
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'workflow_dispatch' || inputs.skip_validation == false)
 
     steps:
       - uses: actions/checkout@v4
@@ -193,7 +242,19 @@ jobs:
           pip install ansible
           ansible-galaxy collection install -r ansible/requirements.yml
 
-      - name: Deploy exporters on all nodes
+      - name: Deploy exporters on all nodes (Dry Run)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Running in check mode (no actual changes)..."
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            --check \
+            --diff \
+            ansible/playbooks/setup-exporters.yml || true
+          echo "✅ Dry run complete"
+
+      - name: Deploy exporters on all nodes (Actual)
+        if: github.event_name != 'pull_request'
         run: |
           ansible-playbook -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
@@ -209,7 +270,8 @@ jobs:
     if: |
       always() &&
       needs.deploy-exporters.result == 'success' &&
-      inputs.skip_validation == false
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'workflow_dispatch' || inputs.skip_validation == false)
 
     steps:
       - uses: actions/checkout@v4
