@@ -1,16 +1,18 @@
 name: Docker Swarm CI/CD Pipeline
 
 on:
+  # Run validations on PR to dev branch
   pull_request:
-    branches: ["main", "dev"]
+    branches: ["dev"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
       - 'configs/**'
       - '.github/workflows/ansible-deploy.yml'
 
+  # Deploy on merge to main branch
   push:
-    branches: ["main", "dev"]
+    branches: ["main"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
@@ -59,7 +61,10 @@ jobs:
   validate:
     name: Validate & Lint
     runs-on: ubuntu-latest
-    if: ${{ inputs.skip_tests == false }}
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.skip_tests == false)
     outputs:
       artifact-path: ${{ steps.artifact.outputs.artifact-path }}
 
@@ -98,7 +103,10 @@ jobs:
     name: Security Scanning
     runs-on: ubuntu-latest
     needs: validate
-    if: ${{ inputs.skip_tests == false }}
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.skip_tests == false)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -134,7 +142,10 @@ jobs:
     name: Test Ansible Playbooks (Syntax Check)
     runs-on: ubuntu-latest
     needs: [validate, security]
-    if: ${{ inputs.skip_tests == false }}
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.skip_tests == false)
     steps:
       - uses: actions/checkout@v4
 
