@@ -20,42 +20,55 @@
       register: cadvisor_pull
       changed_when: "'Downloaded' in cadvisor_pull.stdout"
 
-    - name: Find containers using port 8080
+    - name: Stop all existing exporter containers
       ansible.builtin.shell: |
-        docker ps -a --filter "publish=8080" --format "{{ '{{' }}.ID{{ '}}' }}" || true
+        # Stop and remove any container with cadvisor or node-exporter in the name
+        docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }}" | \
+        grep -iE 'cadvisor|node-exporter' | \
+        awk '{print $1}' | \
+        xargs -r docker rm -f || true
+      register: cleanup_exporters
+      changed_when: cleanup_exporters.stdout != ""
+
+    - name: Find process using port 8080
+      ansible.builtin.shell: |
+        docker ps --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | grep ':8080->' | awk '{print $1}' || true
       register: port_8080_containers
       changed_when: false
 
-    - name: Find containers using port 9100
+    - name: Find process using port 9100
       ansible.builtin.shell: |
-        docker ps -a --filter "publish=9100" --format "{{ '{{' }}.ID{{ '}}' }}" || true
+        docker ps --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | grep ':9100->' | awk '{print $1}' || true
       register: port_9100_containers
       changed_when: false
 
-    - name: Remove all containers using port 8080
+    - name: Force remove containers on port 8080
       ansible.builtin.command: docker rm -f {{ item }}
       loop: "{{ port_8080_containers.stdout_lines }}"
       when: port_8080_containers.stdout_lines | length > 0
       failed_when: false
 
-    - name: Remove all containers using port 9100
+    - name: Force remove containers on port 9100
       ansible.builtin.command: docker rm -f {{ item }}
       loop: "{{ port_9100_containers.stdout_lines }}"
       when: port_9100_containers.stdout_lines | length > 0
       failed_when: false
 
-    - name: Force remove any containers named node-exporter or cadvisor
-      ansible.builtin.command: docker rm -f {{ item }}
-      loop:
-        - node-exporter
-        - cadvisor
+    - name: Kill any process on port 8080 (non-Docker)
+      ansible.builtin.shell: |
+        lsof -ti:8080 | xargs -r kill -9 || true
       failed_when: false
       changed_when: false
 
-    - name: Wait for ports to be released
+    - name: Kill any process on port 9100 (non-Docker)
+      ansible.builtin.shell: |
+        lsof -ti:9100 | xargs -r kill -9 || true
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for ports to be fully released
       ansible.builtin.pause:
         seconds: 5
-      when: (port_8080_containers.stdout_lines | length > 0) or (port_9100_containers.stdout_lines | length > 0)
 
     - name: Start Node Exporter container
       ansible.builtin.command: >
