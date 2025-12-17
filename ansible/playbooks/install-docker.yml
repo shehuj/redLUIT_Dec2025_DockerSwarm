@@ -18,7 +18,7 @@
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Install Prerequisite Packages
+    - name: Install prerequisites for Docker APT repo
       ansible.builtin.apt:
         name:
           - apt-transport-https
@@ -29,32 +29,33 @@
         state: present
         update_cache: true
 
-    - name: Create APT Keyrings Directory
+    - name: Create Docker APT keyrings directory
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: '0755'
 
-    - name: Download Docker GPG key for apt
+    - name: Download Docker official GPG key
       ansible.builtin.get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
 
-    - name: Ensurer Docker GPG Key is Readable
+    - name: Ensure Docker GPG key is readable
       ansible.builtin.file:
-        path: /etc/apt/keyrings/docker.gpg
+        path: /etc/apt/keyrings/docker.asc
         mode: '0644'
 
-    - name: Add Docker APT Repository
+    - name: Add Docker APT repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu{{ ansible_facts.lsb.codename }} stable"
-        state: present
+        repo: "deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         filename: docker
+        state: present
 
-    - name: Update Apt Cache After Adding Docker Repo
+    - name: Update Apt Cache
       ansible.builtin.apt:
         update_cache: true
+        cache_valid_time: 3600
 
     - name: Install Docker Engine and Related Packages
       ansible.builtin.apt:
@@ -72,13 +73,13 @@
         groups: docker
         append: true
 
-    - name: Create Docker Configuration Directory
+    - name: Create Docker configuration directory
       ansible.builtin.file:
         path: /etc/docker
         state: directory
         mode: '0755'
 
-    - name: Configure Docker Daemon
+    - name: Configure Docker daemon
       ansible.builtin.copy:
         content: |
           {
@@ -95,13 +96,13 @@
         mode: '0644'
       notify: Restart Docker
 
-    - name: Ensure Docker Service Is Running
+    - name: Ensure Docker service is running
       ansible.builtin.service:
         name: docker
         state: started
         enabled: true
 
-    - name: Wait for Docker to Be Ready
+    - name: Wait for Docker to be ready
       ansible.builtin.command: docker info
       register: docker_info
       until: docker_info.rc == 0
@@ -109,7 +110,7 @@
       delay: 3
       changed_when: false
 
-    - name: Test Docker Installation with Hello World
+    - name: Test Docker installation with hello-world
       ansible.builtin.command: docker run --rm hello-world
       register: docker_test
       changed_when: false
