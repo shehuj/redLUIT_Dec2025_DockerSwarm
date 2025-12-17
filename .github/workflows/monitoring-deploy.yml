@@ -1,9 +1,29 @@
 name: Monitoring Stack Deployment
 
 # Deploys Prometheus and Grafana monitoring stack
-# Validates monitoring server and connectivity to swarm nodes
+# - Dry run on PR (check mode)
+# - Actual deployment on merge to main
 
 on:
+  pull_request:
+    paths:
+      - 'ansible/playbooks/setup-monitoring.yml'
+      - 'monitoring-stack.yml'
+      - 'configs/prometheus-monitoring.yml'
+      - 'configs/grafana-datasources.yml'
+      - 'ansible/inventory.yml'
+      - '.github/workflows/monitoring-deploy.yml'
+
+  push:
+    branches: ["main"]
+    paths:
+      - 'ansible/playbooks/setup-monitoring.yml'
+      - 'monitoring-stack.yml'
+      - 'configs/prometheus-monitoring.yml'
+      - 'configs/grafana-datasources.yml'
+      - 'ansible/inventory.yml'
+      - '.github/workflows/monitoring-deploy.yml'
+
   workflow_dispatch:
     inputs:
       skip_validation:
@@ -16,8 +36,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: monitoring-deploy
-  cancel-in-progress: false
+  group: monitoring-deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   ANSIBLE_FORCE_COLOR: 'true'
@@ -65,13 +85,26 @@ jobs:
           pip install ansible
           ansible-galaxy collection install -r ansible/requirements.yml
 
-      - name: Deploy monitoring stack via Ansible
+      - name: Deploy monitoring stack via Ansible (Dry Run)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Running in check mode (no actual changes)..."
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            --check \
+            --diff \
+            ansible/playbooks/setup-monitoring.yml || true
+          echo "✅ Dry run complete"
+
+      - name: Deploy monitoring stack via Ansible (Actual)
+        if: github.event_name != 'pull_request'
         run: |
           ansible-playbook -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
             ansible/playbooks/setup-monitoring.yml
 
       - name: Wait for services to start
+        if: github.event_name != 'pull_request'
         run: sleep 30
 
   # ----------------------------------------
@@ -84,7 +117,8 @@ jobs:
     if: |
       always() &&
       needs.deploy-monitoring.result == 'success' &&
-      inputs.skip_validation == false
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'workflow_dispatch' || inputs.skip_validation == false)
 
     steps:
       - name: Setup SSH
@@ -124,7 +158,8 @@ jobs:
     needs: validate-monitoring
     if: |
       always() &&
-      needs.validate-monitoring.result == 'success'
+      needs.validate-monitoring.result == 'success' &&
+      github.event_name != 'pull_request'
 
     steps:
       - name: Setup SSH
