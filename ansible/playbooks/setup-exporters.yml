@@ -57,6 +57,11 @@
         seconds: 5
       when: (port_8080_containers.stdout_lines | length > 0) or (port_9100_containers.stdout_lines | length > 0)
 
+    - name: Wait for ports to be released
+      ansible.builtin.pause:
+        seconds: 3
+      when: rm_node_exporter.rc == 0 or rm_cadvisor.rc == 0
+
     - name: Start Node Exporter container
       ansible.builtin.command: >
         docker run -d
