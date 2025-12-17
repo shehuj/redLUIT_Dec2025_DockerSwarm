@@ -5,7 +5,20 @@
 
   tasks:
 
-    - name: Install prerequisites for Docker APT repo
+    - name: Create correct Docker apt repository file
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        content: |
+          # Docker official repository
+          deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        mode: '0644'
+
+    - name: Update Apt Cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install Prerequisite Packages
       ansible.builtin.apt:
         name:
           - apt-transport-https
@@ -16,33 +29,32 @@
         state: present
         update_cache: true
 
-    - name: Create Docker APT keyrings directory
+    - name: Create APT Keyrings Directory
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: '0755'
 
-    - name: Download Docker official GPG key
+    - name: Download Docker GPG key for apt
       ansible.builtin.get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
 
-    - name: Ensure Docker GPG key is readable
+    - name: Ensurer Docker GPG Key is Readable
       ansible.builtin.file:
-        path: /etc/apt/keyrings/docker.asc
+        path: /etc/apt/keyrings/docker.gpg
         mode: '0644'
 
-    - name: Add Docker APT repository
+    - name: Add Docker APT Repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-        filename: docker
+        repo: "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu{{ ansible_facts.lsb.codename }} stable"
         state: present
+        filename: docker
 
-    - name: Update Apt Cache
+    - name: Update Apt Cache After Adding Docker Repo
       ansible.builtin.apt:
         update_cache: true
-        cache_valid_time: 3600
 
     - name: Install Docker Engine and Related Packages
       ansible.builtin.apt:
@@ -60,13 +72,13 @@
         groups: docker
         append: true
 
-    - name: Create Docker configuration directory
+    - name: Create Docker Configuration Directory
       ansible.builtin.file:
         path: /etc/docker
         state: directory
         mode: '0755'
 
-    - name: Configure Docker daemon
+    - name: Configure Docker Daemon
       ansible.builtin.copy:
         content: |
           {
@@ -83,13 +95,13 @@
         mode: '0644'
       notify: Restart Docker
 
-    - name: Ensure Docker service is running
+    - name: Ensure Docker Service Is Running
       ansible.builtin.service:
         name: docker
         state: started
         enabled: true
 
-    - name: Wait for Docker to be ready
+    - name: Wait for Docker to Be Ready
       ansible.builtin.command: docker info
       register: docker_info
       until: docker_info.rc == 0
@@ -97,7 +109,7 @@
       delay: 3
       changed_when: false
 
-    - name: Test Docker installation with hello-world
+    - name: Test Docker Installation with Hello World
       ansible.builtin.command: docker run --rm hello-world
       register: docker_test
       changed_when: false
