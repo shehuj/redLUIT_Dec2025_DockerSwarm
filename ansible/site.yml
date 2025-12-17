@@ -25,18 +25,18 @@
 - name: Phase 2 - Initialize Swarm
   ansible.builtin.import_playbook: playbooks/swarm-setup.yml
 
-# Phase 3: Deploy Application Stack
-- name: Phase 3 - Deploy Stack
-  ansible.builtin.import_playbook: playbooks/deploy-stack.yml
+# Phase 3: Setup Exporters on Swarm Nodes
+- name: Phase 3 - Setup Exporters
+  ansible.builtin.import_playbook: playbooks/setup-exporters.yml
 
 # Phase 4: Setup Monitoring Server (Optional)
 - name: Phase 4 - Setup Monitoring Server
   ansible.builtin.import_playbook: playbooks/setup-monitoring.yml
   when: setup_monitoring | default(false)
 
-# Phase 5: Verify Deployment
-- name: Phase 5 - Verify Deployment
-  ansible.builtin.import_playbook: playbooks/test-swarm.yml
+# Phase 5: Verify Exporters
+- name: Phase 5 - Verify Exporters
+  ansible.builtin.import_playbook: playbooks/test-exporters.yml
 
 # Final Summary
 - name: Deployment Summary
@@ -47,18 +47,24 @@
       ansible.builtin.debug:
         msg:
           - "========================================="
-          - "   ✅ Docker Swarm Deployment Complete!"
+          - "   ✅ Docker Swarm Setup Complete!"
           - "========================================="
           - ""
-          - "Swarm Services:"
-          - "  • Web:        http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}"
-          - "  • API:        http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:3000"
-          - "  • Visualizer: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:8080"
+          - "Swarm Cluster:"
+          - "  • Manager: {{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}"
+          - "  • Workers: {{ groups['swarm_workers'] | length }} nodes"
+          - ""
+          - "Metrics Exporters (on all nodes):"
+          - "  • Node Exporter:  Port 9100"
+          - "  • cAdvisor:       Port 8080"
+          - "  • Docker Metrics: Port 9323"
           - ""
           - "{% if setup_monitoring | default(false) %}Monitoring Server:{% endif %}"
           - "{% if setup_monitoring | default(false) %}  • Prometheus: http://{{ hostvars[groups['monitoring'][0]]['ansible_host'] }}:9090{% endif %}"
           - "{% if setup_monitoring | default(false) %}  • Grafana:    http://{{ hostvars[groups['monitoring'][0]]['ansible_host'] }}:3000{% endif %}"
           - "{% if setup_monitoring | default(false) %}  • Credentials: admin / change-me-in-production{% endif %}"
+          - "{% if not setup_monitoring | default(false) %}{% endif %}"
+          - "{% if not setup_monitoring | default(false) %}To setup monitoring server:{% endif %}"
+          - "{% if not setup_monitoring | default(false) %}  ansible-playbook site.yml -e 'setup_monitoring=true'{% endif %}"
           - ""
-          - "To setup monitoring: ansible-playbook site.yml -e 'setup_monitoring=true'"
           - "========================================="
