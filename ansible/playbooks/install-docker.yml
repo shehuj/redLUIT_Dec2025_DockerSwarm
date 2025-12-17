@@ -5,14 +5,6 @@
 
   tasks:
 
-    - name: Create correct Docker apt repository file
-      ansible.builtin.copy:
-        dest: /etc/apt/sources.list.d/docker.list
-        content: |
-          # Docker official repository
-          deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
-        mode: '0644'
-
     - name: Update Apt Cache
       ansible.builtin.apt:
         update_cache: true
@@ -35,22 +27,21 @@
         state: directory
         mode: '0755'
 
-    - name: Download Docker official GPG key
+    - name: Download Docker GPG Key
       ansible.builtin.get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
-        dest: /etc/apt/keyrings/docker.asc
-        mode: '0644'
-
-    - name: Ensure Docker GPG key is readable
-      ansible.builtin.file:
-        path: /etc/apt/keyrings/docker.asc
+        dest: /etc/apt/keyrings/docker.gpg
         mode: '0644'
 
     - name: Add Docker APT repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-        filename: docker
+        repo: >-
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg]
+          https://download.docker.com/linux/ubuntu
+          {{ ansible_facts['distribution_release'] }}
+          stable
         state: present
+        filename: docker
 
     - name: Update Apt Cache
       ansible.builtin.apt:
