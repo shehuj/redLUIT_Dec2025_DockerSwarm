@@ -208,18 +208,15 @@ jobs:
 
       - name: Test SSH connectivity
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP 
-          echo "SSH OK"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP "echo 'SSH OK'"
 
       - name: Install Dependencies
         run: |
           pip install ansible boto3 botocore
 
-      - name: Write SSH private key to file
+      - name: Install Ansible Collections
         run: |
-          mkdir -p ~/.ssh
-          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          ansible-galaxy collection install -r ansible/requirements.yml
 
       - name: Deploy via Ansible
         run: |
@@ -242,7 +239,11 @@ jobs:
     needs: deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - run: curl -f http://${{ env.SWARM_MANAGER_IP }}/health
-      - run: curl -f http://${{ env.SWARM_MANAGER_IP }}:9090/-/healthy
-      - run: curl -f http://${{ env.SWARM_MANAGER_IP }}:3000/api/health
-      - run: curl -f http://${{ env.SWARM_MANAGER_IP }}:6379/ping
+      - name: Verify Web Service
+        run: curl -f http://${{ env.SWARM_MANAGER_IP }}/health
+
+      - name: Verify Prometheus
+        run: curl -f http://${{ env.SWARM_MANAGER_IP }}:9090/-/healthy
+
+      - name: Verify Grafana
+        run: curl -f http://${{ env.SWARM_MANAGER_IP }}:3000/api/health
