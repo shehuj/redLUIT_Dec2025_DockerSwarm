@@ -108,6 +108,18 @@
       register: cadvisor_start
       changed_when: true
 
+    - name: Verify containers are running
+      ansible.builtin.command: docker ps --filter "name={{ item }}" --format "{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}"
+      loop:
+        - node-exporter
+        - cadvisor
+      register: container_status
+      changed_when: false
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "{{ container_status.results | map(attribute='stdout') | list }}"
+
     - name: Wait for Node Exporter to be ready
       ansible.builtin.wait_for:
         port: 9100
