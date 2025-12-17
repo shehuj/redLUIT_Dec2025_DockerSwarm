@@ -1,0 +1,55 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'docker-swarm'
+    environment: 'production'
+    monitor: 'external-prometheus'
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'prometheus-server'
+
+  # Node Exporter on monitoring server
+  - job_name: 'monitoring-server'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          instance: 'monitoring-server'
+
+  # cAdvisor on monitoring server
+  - job_name: 'monitoring-cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          instance: 'monitoring-server'
+
+  # Docker Swarm Manager Node
+  - job_name: 'swarm-manager'
+    static_configs:
+      - targets: ['3.218.207.222:9323']
+        labels:
+          instance: 'manager'
+          node_role: 'manager'
+
+  # Docker Swarm Worker Nodes
+  - job_name: 'swarm-workers'
+    static_configs:
+      - targets:
+          - '18.209.211.214:9323'
+          - '44.203.235.22:9323'
+          - '100.48.224.203:9323'
+        labels:
+          node_role: 'worker'
+
+  # Swarm Visualizer (if needed)
+  - job_name: 'swarm-visualizer'
+    static_configs:
+      - targets: ['3.218.207.222:8080']
+        labels:
+          instance: 'visualizer'
+          service: 'swarm-visualizer'

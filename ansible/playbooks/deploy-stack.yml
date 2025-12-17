@@ -35,9 +35,6 @@
         if ! docker secret ls | grep -q api_secret_key; then
           echo "change-me-in-production" | docker secret create api_secret_key -
         fi
-        if ! docker secret ls | grep -q grafana_admin_password; then
-          echo "change-me-in-production" | docker secret create grafana_admin_password -
-        fi
       changed_when: false
       failed_when: false
 
