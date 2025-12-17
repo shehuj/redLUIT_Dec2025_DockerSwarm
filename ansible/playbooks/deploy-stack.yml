@@ -22,13 +22,17 @@
       register: config_files
       loop:
         - nginx.conf
-        - prometheus.yml
-      failed_when: not config_files.results | map(attribute='stat.exists') | select | list | length == 2
 
     - name: Display Config Files Status
       ansible.builtin.debug:
         msg: "Config file {{ item.item }}: {{ 'exists' if item.stat.exists else 'missing' }}"
       loop: "{{ config_files.results }}"
+
+    - name: Fail if Config Files Missing
+      ansible.builtin.fail:
+        msg: "Required config file {{ item.item }} is missing"
+      loop: "{{ config_files.results }}"
+      when: not item.stat.exists
 
     - name: Create Docker Secrets if Not Exist
       ansible.builtin.shell: |
