@@ -42,7 +42,6 @@
           stable
         state: present
         filename: docker
-        state: present
 
     - name: Update Apt Cache
       ansible.builtin.apt:
