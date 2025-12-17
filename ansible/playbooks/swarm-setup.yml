@@ -206,9 +206,15 @@
         fail_msg: "Expected at least 2 nodes in the cluster"
         success_msg: "Swarm cluster has {{ node_list.stdout_lines | length }} nodes"
 
+    - name: Get Worker Node IDs
+      ansible.builtin.shell: >
+        docker node ls --filter role=worker --format "{{ '{{' }}.ID{{ '}}' }}"
+      register: worker_node_ids
+      changed_when: false
+
     - name: Label Worker Nodes for Application Deployment
       ansible.builtin.command: >
         docker node update --label-add type=worker {{ item }}
-      loop: "{{ groups['swarm_workers'] }}"
-      when: groups['swarm_workers'] is defined
+      loop: "{{ worker_node_ids.stdout_lines }}"
+      when: worker_node_ids.stdout_lines | length > 0
       changed_when: false
