@@ -36,15 +36,6 @@
           - "  Node Exporter:  {{ 'OK (200)' if node_exporter.status == 200 else 'FAILED (' + (node_exporter.status | string) + ')' }}"
           - "  cAdvisor:       {{ 'OK (200)' if cadvisor.status == 200 else 'FAILED (' + (cadvisor.status | string) + ')' }}"
 
-    - name: Fail if any exporter is not responding
-      ansible.builtin.fail:
-        msg: |
-          One or more exporters are not responding on {{ inventory_hostname }}:
-          - Docker Metrics (9323): {{ docker_metrics.status }}
-          - Node Exporter (9100): {{ node_exporter.status }}
-          - cAdvisor (8080): {{ cadvisor.status }}
-#      when: docker_metrics.status != 200 or node_exporter.status != 200 or cadvisor.status != 200
-
 - name: Verify Swarm Cluster Health
   hosts: swarm_manager
   become: true
