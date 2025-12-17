@@ -1,0 +1,85 @@
+---
+- name: Verify Exporters on All Nodes
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Check Docker Metrics endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:9323/metrics"
+        return_content: false
+        status_code: 200
+      register: docker_metrics
+      failed_when: false
+
+    - name: Check Node Exporter endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:9100/metrics"
+        return_content: false
+        status_code: 200
+      register: node_exporter
+      failed_when: false
+
+    - name: Check cAdvisor endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:8080/metrics"
+        return_content: false
+        status_code: 200
+      register: cadvisor
+      failed_when: false
+
+    - name: Display exporter status
+      ansible.builtin.debug:
+        msg:
+          - "Node: {{ inventory_hostname }}"
+          - "  Docker Metrics: {{ 'OK' if docker_metrics.status == 200 else 'FAILED' }}"
+          - "  Node Exporter:  {{ 'OK' if node_exporter.status == 200 else 'FAILED' }}"
+          - "  cAdvisor:       {{ 'OK' if cadvisor.status == 200 else 'FAILED' }}"
+
+    - name: Fail if any exporter is not responding
+      ansible.builtin.fail:
+        msg: "One or more exporters are not responding on {{ inventory_hostname }}"
+      when: docker_metrics.status != 200 or node_exporter.status != 200 or cadvisor.status != 200
+
+- name: Verify Swarm Cluster Health
+  hosts: swarm_manager
+  become: true
+
+  tasks:
+    - name: Get swarm node list
+      ansible.builtin.command: docker node ls --format "{{ '{{' }}.Hostname{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}"
+      register: swarm_nodes
+      changed_when: false
+
+    - name: Display swarm nodes
+      ansible.builtin.debug:
+        msg: "{{ swarm_nodes.stdout_lines }}"
+
+    - name: Check all nodes are ready
+      ansible.builtin.assert:
+        that:
+          - "'Down' not in swarm_nodes.stdout"
+        fail_msg: "One or more swarm nodes are down"
+        success_msg: "All swarm nodes are ready"
+
+- name: Summary
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Display verification summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   ✅ Exporters Verification Complete!"
+          - "========================================="
+          - ""
+          - "All exporters are responding on all nodes:"
+          - "  • Docker Metrics (port 9323)"
+          - "  • Node Exporter (port 9100)"
+          - "  • cAdvisor (port 8080)"
+          - ""
+          - "Swarm cluster is healthy and ready"
+          - "Ready to be monitored by Prometheus"
+          - ""
+          - "========================================="

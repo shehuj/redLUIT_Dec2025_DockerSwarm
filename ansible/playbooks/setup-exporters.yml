@@ -1,0 +1,134 @@
+---
+- name: Setup Exporters on Swarm Nodes
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Ensure Docker is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Pull Node Exporter image
+      ansible.builtin.command: docker pull prom/node-exporter:v1.7.0
+      register: node_exporter_pull
+      changed_when: "'Downloaded' in node_exporter_pull.stdout"
+
+    - name: Pull cAdvisor image
+      ansible.builtin.command: docker pull gcr.io/cadvisor/cadvisor:v0.47.2
+      register: cadvisor_pull
+      changed_when: "'Downloaded' in cadvisor_pull.stdout"
+
+    - name: Stop existing Node Exporter container
+      ansible.builtin.command: docker stop node-exporter
+      register: stop_node_exporter
+      failed_when: false
+      changed_when: stop_node_exporter.rc == 0
+
+    - name: Remove existing Node Exporter container
+      ansible.builtin.command: docker rm node-exporter
+      register: rm_node_exporter
+      failed_when: false
+      changed_when: rm_node_exporter.rc == 0
+
+    - name: Stop existing cAdvisor container
+      ansible.builtin.command: docker stop cadvisor
+      register: stop_cadvisor
+      failed_when: false
+      changed_when: stop_cadvisor.rc == 0
+
+    - name: Remove existing cAdvisor container
+      ansible.builtin.command: docker rm cadvisor
+      register: rm_cadvisor
+      failed_when: false
+      changed_when: rm_cadvisor.rc == 0
+
+    - name: Start Node Exporter container
+      ansible.builtin.command: >
+        docker run -d
+        --name node-exporter
+        --restart unless-stopped
+        --net="host"
+        --pid="host"
+        -v "/:/host:ro,rslave"
+        prom/node-exporter:v1.7.0
+        --path.rootfs=/host
+      register: node_exporter_start
+      changed_when: true
+
+    - name: Start cAdvisor container
+      ansible.builtin.command: >
+        docker run -d
+        --name cadvisor
+        --restart unless-stopped
+        --volume=/:/rootfs:ro
+        --volume=/var/run:/var/run:ro
+        --volume=/sys:/sys:ro
+        --volume=/var/lib/docker/:/var/lib/docker:ro
+        --volume=/dev/disk/:/dev/disk:ro
+        --publish=8080:8080
+        --detach=true
+        gcr.io/cadvisor/cadvisor:v0.47.2
+      register: cadvisor_start
+      changed_when: true
+
+    - name: Wait for Node Exporter to be ready
+      ansible.builtin.wait_for:
+        port: 9100
+        delay: 2
+        timeout: 30
+
+    - name: Wait for cAdvisor to be ready
+      ansible.builtin.wait_for:
+        port: 8080
+        delay: 2
+        timeout: 30
+
+    - name: Verify Node Exporter is responding
+      ansible.builtin.uri:
+        url: "http://localhost:9100/metrics"
+        return_content: false
+        status_code: 200
+      register: node_exporter_health
+
+    - name: Verify cAdvisor is responding
+      ansible.builtin.uri:
+        url: "http://localhost:8080/metrics"
+        return_content: false
+        status_code: 200
+      register: cadvisor_health
+
+    - name: Display exporter status
+      ansible.builtin.debug:
+        msg:
+          - "Node Exporter: {{ 'Running' if node_exporter_health.status == 200 else 'Failed' }}"
+          - "cAdvisor: {{ 'Running' if cadvisor_health.status == 200 else 'Failed' }}"
+          - "Docker Metrics: Available on port 9323"
+
+- name: Display Exporters Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Show exporters information
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Exporters Deployed Successfully!"
+          - "========================================="
+          - ""
+          - "Swarm Manager:"
+          - "  • Node Exporter: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9100/metrics"
+          - "  • cAdvisor:      http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:8080/metrics"
+          - "  • Docker Metrics: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9323/metrics"
+          - ""
+          - "Swarm Workers:"
+          - "{% for host in groups['swarm_workers'] %}"
+          - "  {{ host }}:"
+          - "    • Node Exporter: http://{{ hostvars[host]['ansible_host'] }}:9100/metrics"
+          - "    • cAdvisor:      http://{{ hostvars[host]['ansible_host'] }}:8080/metrics"
+          - "    • Docker Metrics: http://{{ hostvars[host]['ansible_host'] }}:9323/metrics"
+          - "{% endfor %}"
+          - ""
+          - "These metrics are ready to be scraped by Prometheus"
+          - "========================================="
