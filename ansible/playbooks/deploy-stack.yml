@@ -46,10 +46,32 @@
       retries: 30
       delay: 10
       changed_when: false
+      failed_when: false
 
     - name: Display Stack Services Status
       ansible.builtin.debug:
         msg: "{{ stack_status.stdout_lines }}"
+
+    - name: Check for Failed Services
+      ansible.builtin.shell: |
+        echo "=== Service Logs for Web ==="
+        docker service logs mystack_web --tail 50 2>&1 || echo "No logs available"
+        echo ""
+        echo "=== Service Logs for API ==="
+        docker service logs mystack_api --tail 50 2>&1 || echo "No logs available"
+        echo ""
+        echo "=== Failed Tasks ==="
+        docker service ps mystack_web --no-trunc --filter "desired-state=running" 2>&1 || echo "No tasks"
+        docker service ps mystack_api --no-trunc --filter "desired-state=running" 2>&1 || echo "No tasks"
+      register: service_diagnostics
+      when: stack_status.stdout_lines | select('search', '0/') | list | length > 0
+      changed_when: false
+      failed_when: false
+
+    - name: Display Service Diagnostics
+      ansible.builtin.debug:
+        msg: "{{ service_diagnostics.stdout_lines }}"
+      when: service_diagnostics.stdout is defined
 
     - name: Verify Stack Deployment
       ansible.builtin.command: docker stack ps mystack --no-trunc

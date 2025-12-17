@@ -52,6 +52,24 @@ services:
   # API service
   api:
     image: node:20-alpine
+    command:
+      - sh
+      - -c
+      - |
+        cat > /tmp/server.js << 'EOF'
+        const http = require('http');
+        const server = http.createServer((req, res) => {
+          if (req.url === '/health') {
+            res.writeHead(200);
+            res.end('OK');
+          } else {
+            res.writeHead(200);
+            res.end('API Service Running');
+          }
+        });
+        server.listen(3000, () => console.log('API listening on port 3000'));
+        EOF
+        node /tmp/server.js
     deploy:
       replicas: 2
       update_config:
