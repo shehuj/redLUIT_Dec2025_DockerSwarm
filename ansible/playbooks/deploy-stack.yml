@@ -16,6 +16,20 @@
         dest: /tmp/configs/
         mode: '0644'
 
+    - name: Verify Config Files Exist
+      ansible.builtin.stat:
+        path: "/tmp/configs/{{ item }}"
+      register: config_files
+      loop:
+        - nginx.conf
+        - prometheus.yml
+      failed_when: not config_files.results | map(attribute='stat.exists') | select | list | length == 2
+
+    - name: Display Config Files Status
+      ansible.builtin.debug:
+        msg: "Config file {{ item.item }}: {{ 'exists' if item.stat.exists else 'missing' }}"
+      loop: "{{ config_files.results }}"
+
     - name: Create Docker Secrets if Not Exist
       ansible.builtin.shell: |
         if ! docker secret ls | grep -q api_secret_key; then
@@ -46,7 +60,7 @@
       retries: 30
       delay: 10
       changed_when: false
-      failed_when: false
+      failed_when: stack_status.stdout_lines | select('search', '0/') | list | length > 0
 
     - name: Display Stack Services Status
       ansible.builtin.debug:
@@ -54,15 +68,26 @@
 
     - name: Check for Failed Services
       ansible.builtin.shell: |
+        echo "=== Service Status ==="
+        docker service ls --filter label=com.docker.stack.namespace=mystack
+        echo ""
         echo "=== Service Logs for Web ==="
-        docker service logs mystack_web --tail 50 2>&1 || echo "No logs available"
+        docker service logs mystack_web --tail 100 2>&1 || echo "No logs available"
         echo ""
         echo "=== Service Logs for API ==="
-        docker service logs mystack_api --tail 50 2>&1 || echo "No logs available"
+        docker service logs mystack_api --tail 100 2>&1 || echo "No logs available"
         echo ""
-        echo "=== Failed Tasks ==="
-        docker service ps mystack_web --no-trunc --filter "desired-state=running" 2>&1 || echo "No tasks"
-        docker service ps mystack_api --no-trunc --filter "desired-state=running" 2>&1 || echo "No tasks"
+        echo "=== Web Service Tasks (including failed) ==="
+        docker service ps mystack_web --no-trunc 2>&1 || echo "No tasks"
+        echo ""
+        echo "=== API Service Tasks (including failed) ==="
+        docker service ps mystack_api --no-trunc 2>&1 || echo "No tasks"
+        echo ""
+        echo "=== Web Service Inspect ==="
+        docker service inspect mystack_web --pretty 2>&1 || echo "Service not found"
+        echo ""
+        echo "=== Network Connectivity Test ==="
+        docker run --rm --network mystack_frontend alpine wget -O- http://mystack_web/health 2>&1 || echo "Cannot connect"
       register: service_diagnostics
       when: stack_status.stdout_lines | select('search', '0/') | list | length > 0
       changed_when: false
