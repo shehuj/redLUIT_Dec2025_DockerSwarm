@@ -138,63 +138,6 @@ services:
       timeout: 5s
       retries: 3
 
-  # Monitoring - Prometheus
-  prometheus:
-    image: prom/prometheus:v2.48.0
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-      labels:
-        - "com.docker.stack.namespace=mystack"
-        - "app=prometheus"
-    ports:
-      - "9090:9090"
-    networks:
-      - monitoring
-      - backend
-    volumes:
-      - prometheus_data:/prometheus
-    configs:
-      - source: prometheus_config
-        target: /etc/prometheus/prometheus.yml
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-
-  # Monitoring - Grafana
-  grafana:
-    image: grafana/grafana:10.2.2
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-      labels:
-        - "com.docker.stack.namespace=mystack"
-        - "app=grafana"
-    ports:
-      - "3000:3000"
-    networks:
-      - monitoring
-    volumes:
-      - grafana_data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
-      - GF_INSTALL_PLUGINS=grafana-clock-panel
-    secrets:
-      - grafana_admin_password
-
   # Visualizer for Swarm
   visualizer:
     image: dockersamples/visualizer:latest
@@ -213,7 +156,7 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - monitoring
+      - backend
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
@@ -224,26 +167,15 @@ networks:
   backend:
     driver: overlay
     attachable: true
-  monitoring:
-    driver: overlay
-    attachable: true
 
 volumes:
   redis_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
     driver: local
 
 configs:
   nginx_config:
     file: ./configs/nginx.conf
-  prometheus_config:
-    file: ./configs/prometheus.yml
 
 secrets:
   api_secret_key:
-    external: true
-  grafana_admin_password:
     external: true

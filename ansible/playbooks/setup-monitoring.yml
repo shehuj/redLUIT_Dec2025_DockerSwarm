@@ -1,0 +1,164 @@
+---
+- name: Setup Monitoring Server
+  hosts: monitoring
+  become: true
+  vars:
+    docker_apt_repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu"
+
+  tasks:
+    - name: Remove existing Docker repository files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/docker.list
+        - /etc/apt/keyrings/docker.gpg
+        - /etc/apt/keyrings/docker.asc
+      ignore_errors: true
+
+    - name: Update Apt Cache after cleanup
+      ansible.builtin.apt:
+        update_cache: true
+      ignore_errors: true
+
+    - name: Update Apt Cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Create Docker APT keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Docker GPG Key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /tmp/docker.gpg.asc
+        mode: '0644'
+
+    - name: Dearmor Docker GPG Key
+      ansible.builtin.shell: |
+        gpg --dearmor < /tmp/docker.gpg.asc > /etc/apt/keyrings/docker.gpg
+        chmod 644 /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker APT Repository
+      ansible.builtin.apt_repository:
+        repo: "{{ docker_apt_repo }} {{ ansible_facts['distribution_release'] }} stable"
+        state: present
+        filename: docker
+        update_cache: true
+
+    - name: Install Docker and Docker Compose
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Ensure Docker service is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create monitoring directory
+      ansible.builtin.file:
+        path: /opt/monitoring
+        state: directory
+        mode: '0755'
+
+    - name: Create configs directory
+      ansible.builtin.file:
+        path: /opt/monitoring/configs
+        state: directory
+        mode: '0755'
+
+    - name: Copy monitoring stack file
+      ansible.builtin.copy:
+        src: "../../monitoring-stack.yml"
+        dest: /opt/monitoring/docker-compose.yml
+        mode: '0644'
+
+    - name: Copy Prometheus config
+      ansible.builtin.copy:
+        src: "../../configs/prometheus-monitoring.yml"
+        dest: /opt/monitoring/configs/prometheus-monitoring.yml
+        mode: '0644'
+
+    - name: Copy Grafana datasources config
+      ansible.builtin.copy:
+        src: "../../configs/grafana-datasources.yml"
+        dest: /opt/monitoring/configs/grafana-datasources.yml
+        mode: '0644'
+
+    - name: Deploy monitoring stack
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: /opt/monitoring
+      register: compose_output
+      changed_when: "'Started' in compose_output.stdout or 'Created' in compose_output.stdout"
+
+    - name: Wait for Prometheus to be ready
+      ansible.builtin.uri:
+        url: "http://localhost:9090/-/ready"
+        status_code: 200
+      register: prometheus_ready
+      until: prometheus_ready.status == 200
+      retries: 30
+      delay: 5
+
+    - name: Wait for Grafana to be ready
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/health"
+        status_code: 200
+      register: grafana_ready
+      until: grafana_ready.status == 200
+      retries: 30
+      delay: 5
+
+    - name: Display monitoring stack status
+      ansible.builtin.command: docker compose ps
+      args:
+        chdir: /opt/monitoring
+      register: monitoring_status
+      changed_when: false
+
+    - name: Show monitoring services
+      ansible.builtin.debug:
+        msg: "{{ monitoring_status.stdout_lines }}"
+
+    - name: Display access information
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Monitoring Stack Deployed!"
+          - "========================================="
+          - ""
+          - "Access URLs:"
+          - "  Prometheus: http://{{ ansible_facts.default_ipv4.address }}:9090"
+          - "  Grafana:    http://{{ ansible_facts.default_ipv4.address }}:3000"
+          - "  Node Exporter: http://{{ ansible_facts.default_ipv4.address }}:9100"
+          - "  cAdvisor:   http://{{ ansible_facts.default_ipv4.address }}:8080"
+          - ""
+          - "Default Grafana credentials:"
+          - "  Username: admin"
+          - "  Password: change-me-in-production"
+          - ""
+          - "========================================="

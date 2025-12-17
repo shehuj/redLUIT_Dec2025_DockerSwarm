@@ -29,8 +29,13 @@
 - name: Phase 3 - Deploy Stack
   ansible.builtin.import_playbook: playbooks/deploy-stack.yml
 
-# Phase 4: Verify Deployment
-- name: Phase 4 - Verify Deployment
+# Phase 4: Setup Monitoring Server (Optional)
+- name: Phase 4 - Setup Monitoring Server
+  ansible.builtin.import_playbook: playbooks/setup-monitoring.yml
+  when: setup_monitoring | default(false)
+
+# Phase 5: Verify Deployment
+- name: Phase 5 - Verify Deployment
   ansible.builtin.import_playbook: playbooks/test-swarm.yml
 
 # Final Summary
@@ -45,13 +50,15 @@
           - "   ✅ Docker Swarm Deployment Complete!"
           - "========================================="
           - ""
-          - "Access your services:"
+          - "Swarm Services:"
           - "  • Web:        http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}"
-          - "  • Prometheus: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9090"
-          - "  • Grafana:    http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:3000"
+          - "  • API:        http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:3000"
           - "  • Visualizer: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:8080"
           - ""
-          - "Default credentials:"
-          - "  • Grafana: admin / change-me-in-production"
+          - "{% if setup_monitoring | default(false) %}Monitoring Server:{% endif %}"
+          - "{% if setup_monitoring | default(false) %}  • Prometheus: http://{{ hostvars[groups['monitoring'][0]]['ansible_host'] }}:9090{% endif %}"
+          - "{% if setup_monitoring | default(false) %}  • Grafana:    http://{{ hostvars[groups['monitoring'][0]]['ansible_host'] }}:3000{% endif %}"
+          - "{% if setup_monitoring | default(false) %}  • Credentials: admin / change-me-in-production{% endif %}"
           - ""
+          - "To setup monitoring: ansible-playbook site.yml -e 'setup_monitoring=true'"
           - "========================================="
