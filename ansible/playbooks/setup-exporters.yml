@@ -112,23 +112,23 @@
   tasks:
     - name: Show exporters information
       ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   Exporters Deployed Successfully!"
-          - "========================================="
-          - ""
-          - "Swarm Manager:"
-          - "  • Node Exporter: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9100/metrics"
-          - "  • cAdvisor:      http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:8080/metrics"
-          - "  • Docker Metrics: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9323/metrics"
-          - ""
-          - "Swarm Workers:"
-          - "{% for host in groups['swarm_workers'] %}"
-          - "  {{ host }}:"
-          - "    • Node Exporter: http://{{ hostvars[host]['ansible_host'] }}:9100/metrics"
-          - "    • cAdvisor:      http://{{ hostvars[host]['ansible_host'] }}:8080/metrics"
-          - "    • Docker Metrics: http://{{ hostvars[host]['ansible_host'] }}:9323/metrics"
-          - "{% endfor %}"
-          - ""
-          - "These metrics are ready to be scraped by Prometheus"
-          - "========================================="
+        msg: |
+          =========================================
+             Exporters Deployed Successfully!
+          =========================================
+
+          Swarm Manager:
+            • Node Exporter: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9100/metrics
+            • cAdvisor:      http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:8080/metrics
+            • Docker Metrics: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9323/metrics
+
+          Swarm Workers:
+          {% for host in groups['swarm_workers'] %}
+            {{ host }}:
+              • Node Exporter: http://{{ hostvars[host]['ansible_host'] }}:9100/metrics
+              • cAdvisor:      http://{{ hostvars[host]['ansible_host'] }}:8080/metrics
+              • Docker Metrics: http://{{ hostvars[host]['ansible_host'] }}:9323/metrics
+          {% endfor %}
+
+          These metrics are ready to be scraped by Prometheus
+          =========================================

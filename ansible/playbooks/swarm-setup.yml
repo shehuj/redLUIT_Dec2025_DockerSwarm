@@ -174,15 +174,6 @@
       delay: 3
       changed_when: false
 
-    - name: Verify Worker Successfully Joined Swarm
-      ansible.builtin.command: >
-        docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
-      register: final_swarm_status
-      until: final_swarm_status.stdout == "active"
-      retries: 5
-      delay: 3
-      changed_when: false
-
 - name: Verify Swarm Cluster
   hosts: swarm_manager
   become: true
