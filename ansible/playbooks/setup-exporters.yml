@@ -20,29 +20,22 @@
       register: cadvisor_pull
       changed_when: "'Downloaded' in cadvisor_pull.stdout"
 
-    - name: Stop existing Node Exporter container
-      ansible.builtin.command: docker stop node-exporter
-      register: stop_node_exporter
-      failed_when: false
-      changed_when: stop_node_exporter.rc == 0
-
-    - name: Remove existing Node Exporter container
-      ansible.builtin.command: docker rm node-exporter
+    - name: Force remove existing Node Exporter container
+      ansible.builtin.command: docker rm -f node-exporter
       register: rm_node_exporter
       failed_when: false
       changed_when: rm_node_exporter.rc == 0
 
-    - name: Stop existing cAdvisor container
-      ansible.builtin.command: docker stop cadvisor
-      register: stop_cadvisor
-      failed_when: false
-      changed_when: stop_cadvisor.rc == 0
-
-    - name: Remove existing cAdvisor container
-      ansible.builtin.command: docker rm cadvisor
+    - name: Force remove existing cAdvisor container
+      ansible.builtin.command: docker rm -f cadvisor
       register: rm_cadvisor
       failed_when: false
       changed_when: rm_cadvisor.rc == 0
+
+    - name: Wait for ports to be released
+      ansible.builtin.pause:
+        seconds: 3
+      when: rm_node_exporter.rc == 0 or rm_cadvisor.rc == 0
 
     - name: Start Node Exporter container
       ansible.builtin.command: >
