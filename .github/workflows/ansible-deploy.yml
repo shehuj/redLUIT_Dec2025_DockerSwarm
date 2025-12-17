@@ -239,11 +239,41 @@ jobs:
     needs: deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
+      - name: Wait for Services to Be Ready
+        run: sleep 60
+
       - name: Verify Web Service
-        run: curl -f http://${{ env.SWARM_MANAGER_IP }}/health
+        run: |
+          for i in {1..10}; do
+            if curl -f http://${{ env.SWARM_MANAGER_IP }}/health; then
+              echo "Web service is healthy"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+          done
+          exit 1
 
       - name: Verify Prometheus
-        run: curl -f http://${{ env.SWARM_MANAGER_IP }}:9090/-/healthy
+        run: |
+          for i in {1..5}; do
+            if curl -f http://${{ env.SWARM_MANAGER_IP }}:9090/-/healthy; then
+              echo "Prometheus is healthy"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+          done
+          exit 1
 
       - name: Verify Grafana
-        run: curl -f http://${{ env.SWARM_MANAGER_IP }}:3000/api/health
+        run: |
+          for i in {1..5}; do
+            if curl -f http://${{ env.SWARM_MANAGER_IP }}:3000/api/health; then
+              echo "Grafana is healthy"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+          done
+          exit 1
