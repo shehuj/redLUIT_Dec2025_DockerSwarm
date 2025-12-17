@@ -20,39 +20,48 @@
       register: cadvisor_pull
       changed_when: "'Downloaded' in cadvisor_pull.stdout"
 
-    - name: Stop all existing exporter containers
+    - name: Find ALL containers using port 8080
       ansible.builtin.shell: |
-        # Stop and remove any container with cadvisor or node-exporter in the name
+        docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | \
+        grep -E ':8080|8080/tcp' | \
+        awk '{print $1}' || true
+      register: port_8080_all_containers
+      changed_when: false
+
+    - name: Find ALL containers using port 9100
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | \
+        grep -E ':9100|9100/tcp' | \
+        awk '{print $1}' || true
+      register: port_9100_all_containers
+      changed_when: false
+
+    - name: Display containers found on ports
+      ansible.builtin.debug:
+        msg:
+          - "Containers on port 8080: {{ port_8080_all_containers.stdout_lines }}"
+          - "Containers on port 9100: {{ port_9100_all_containers.stdout_lines }}"
+
+    - name: Force remove ALL containers on port 8080
+      ansible.builtin.command: docker rm -f {{ item }}
+      loop: "{{ port_8080_all_containers.stdout_lines }}"
+      when: port_8080_all_containers.stdout_lines | length > 0
+      failed_when: false
+
+    - name: Force remove ALL containers on port 9100
+      ansible.builtin.command: docker rm -f {{ item }}
+      loop: "{{ port_9100_all_containers.stdout_lines }}"
+      when: port_9100_all_containers.stdout_lines | length > 0
+      failed_when: false
+
+    - name: Remove containers by name (cadvisor, node-exporter)
+      ansible.builtin.shell: |
         docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }}" | \
-        grep -iE 'cadvisor|node-exporter' | \
+        grep -iE 'cadvisor|node-exporter|mystack' | \
         awk '{print $1}' | \
         xargs -r docker rm -f || true
-      register: cleanup_exporters
-      changed_when: cleanup_exporters.stdout != ""
-
-    - name: Find process using port 8080
-      ansible.builtin.shell: |
-        docker ps --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | grep ':8080->' | awk '{print $1}' || true
-      register: port_8080_containers
-      changed_when: false
-
-    - name: Find process using port 9100
-      ansible.builtin.shell: |
-        docker ps --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | grep ':9100->' | awk '{print $1}' || true
-      register: port_9100_containers
-      changed_when: false
-
-    - name: Force remove containers on port 8080
-      ansible.builtin.command: docker rm -f {{ item }}
-      loop: "{{ port_8080_containers.stdout_lines }}"
-      when: port_8080_containers.stdout_lines | length > 0
-      failed_when: false
-
-    - name: Force remove containers on port 9100
-      ansible.builtin.command: docker rm -f {{ item }}
-      loop: "{{ port_9100_containers.stdout_lines }}"
-      when: port_9100_containers.stdout_lines | length > 0
-      failed_when: false
+      register: cleanup_by_name
+      changed_when: cleanup_by_name.stdout != ""
 
     - name: Kill any process on port 8080 (non-Docker)
       ansible.builtin.shell: |
