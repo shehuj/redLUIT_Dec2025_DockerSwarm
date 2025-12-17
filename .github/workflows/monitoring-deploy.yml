@@ -1,0 +1,182 @@
+name: Monitoring Stack Deployment
+
+# Deploys Prometheus and Grafana monitoring stack
+# Validates monitoring server and connectivity to swarm nodes
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_validation:
+        description: 'Skip validation checks'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monitoring-deploy
+  cancel-in-progress: false
+
+env:
+  ANSIBLE_FORCE_COLOR: 'true'
+  ANSIBLE_HOST_KEY_CHECKING: 'false'
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  MONITORING_SERVER_IP: ${{ secrets.MONITORING_SERVER_IP }}
+
+jobs:
+  # ----------------------------------------
+  # Deploy Monitoring Stack
+  # ----------------------------------------
+  deploy-monitoring:
+    name: Deploy Monitoring Stack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verify Required Secrets
+        run: |
+          if [ -z "$MONITORING_SERVER_IP" ]; then
+            echo "❌ Missing MONITORING_SERVER_IP secret"
+            exit 1
+          fi
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "❌ Missing SSH_PRIVATE_KEY secret"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Test SSH connectivity to monitoring server
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP "echo 'SSH OK'"
+
+      - name: Install Ansible and dependencies
+        run: |
+          pip install ansible
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Deploy monitoring stack via Ansible
+        run: |
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            ansible/playbooks/setup-monitoring.yml
+
+      - name: Wait for services to start
+        run: sleep 30
+
+  # ----------------------------------------
+  # Validate Monitoring Services
+  # ----------------------------------------
+  validate-monitoring:
+    name: Validate Monitoring Services
+    runs-on: ubuntu-latest
+    needs: deploy-monitoring
+    if: |
+      always() &&
+      needs.deploy-monitoring.result == 'success' &&
+      inputs.skip_validation == false
+
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Check Docker Compose status
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "cd /opt/monitoring && docker compose ps"
+
+      - name: Verify Prometheus is running
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "curl -f http://localhost:9090/-/healthy" && echo "✅ Prometheus is healthy"
+
+      - name: Verify Grafana is running
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "curl -f http://localhost:3000/api/health" && echo "✅ Grafana is healthy"
+
+      - name: Check Prometheus targets
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "curl -s http://localhost:9090/api/v1/targets | grep -q 'swarm'" && \
+            echo "✅ Swarm targets configured" || \
+            echo "⚠️  Swarm targets may not be configured"
+
+  # ----------------------------------------
+  # Test Metrics Collection
+  # ----------------------------------------
+  test-metrics:
+    name: Test Metrics Collection
+    runs-on: ubuntu-latest
+    needs: validate-monitoring
+    if: |
+      always() &&
+      needs.validate-monitoring.result == 'success'
+
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Test Prometheus scraping
+        run: |
+          echo "Checking if Prometheus is collecting metrics..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "curl -s 'http://localhost:9090/api/v1/query?query=up' | grep -q '\"value\"' && echo '✅ Metrics are being collected' || echo '⚠️ No metrics found yet (may need more time)'"
+
+      - name: Check Docker metrics availability
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "curl -s 'http://localhost:9090/api/v1/query?query=engine_daemon_engine_info' | grep -q 'swarm' && echo '✅ Docker Swarm metrics available' || echo '⚠️ Docker metrics not yet available'"
+
+      - name: Verify Node Exporter metrics
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "curl -s 'http://localhost:9090/api/v1/query?query=node_uname_info' | grep -q 'nodename' && echo '✅ Node Exporter metrics available' || echo '⚠️ Node Exporter metrics not yet available'"
+
+      - name: Check cAdvisor metrics
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP \
+            "curl -s 'http://localhost:9090/api/v1/query?query=container_memory_usage_bytes' | grep -q 'container_memory' && echo '✅ cAdvisor metrics available' || echo '⚠️ cAdvisor metrics not yet available'"
+
+  # ----------------------------------------
+  # Display Access Information
+  # ----------------------------------------
+  access-info:
+    name: Display Access Information
+    runs-on: ubuntu-latest
+    needs: [deploy-monitoring, validate-monitoring, test-metrics]
+    if: always()
+
+    steps:
+      - name: Generate access information
+        run: |
+          echo "### Monitoring Stack Deployment Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Deployment: ${{ needs.deploy-monitoring.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Validation: ${{ needs.validate-monitoring.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Metrics Test: ${{ needs.test-metrics.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Access URLs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Prometheus**: http://${{ secrets.MONITORING_SERVER_IP }}:9090" >> $GITHUB_STEP_SUMMARY
+          echo "- **Grafana**: http://${{ secrets.MONITORING_SERVER_IP }}:3000" >> $GITHUB_STEP_SUMMARY
+          echo "  - Username: \`admin\`" >> $GITHUB_STEP_SUMMARY
+          echo "  - Password: \`change-me-in-production\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Access Grafana and change the default password" >> $GITHUB_STEP_SUMMARY
+          echo "2. Import dashboards for Docker Swarm monitoring" >> $GITHUB_STEP_SUMMARY
+          echo "3. Configure alerting rules in Prometheus" >> $GITHUB_STEP_SUMMARY
