@@ -29,6 +29,7 @@
           - gnupg
           - lsb-release
         state: present
+        update_cache: yes
 
     - name: Create Docker APT keyrings directory
       ansible.builtin.file:
@@ -42,15 +43,12 @@
         dest: /etc/apt/keyrings/docker.gpg
         mode: '0644'
 
-    - name: Add Docker APT repository
+    - name: Add Docker APT Repository
       ansible.builtin.apt_repository:
-        repo: >-
-          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg]
-          https://download.docker.com/linux/ubuntu
-          {{ ansible_facts['distribution_release'] }}
-          stable
+        repo: "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
         filename: docker
+        update_cache: yes
 
     - name: Update Apt Cache
       ansible.builtin.apt:
