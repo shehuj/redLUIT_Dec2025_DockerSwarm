@@ -1,13 +1,12 @@
 name: Docker Swarm CI/CD Pipeline
 
 # Workflow Flow:
-# 1. PR to dev → Run validations (lint, security, syntax) + Dry run deployment (check mode)
+# 1. Any PR → Run validations (lint, security, syntax) + Dry run deployment (check mode)
 # 2. Merge to main → Run validations + Actual deployment + Verification
 
 on:
-  # Run validations and dry run deployment on PR to dev branch
+  # Run validations and dry run deployment on any pull request
   pull_request:
-    branches: ["dev"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
@@ -182,13 +181,13 @@ jobs:
           path: artifacts
 
   # ----------------------------------------
-  # Dry Run Deployment (PR to dev)
+  # Dry Run Deployment (Any PR)
   # ----------------------------------------
   dry-run:
     name: Dry Run Deployment
     runs-on: ubuntu-latest
     needs: [validate, security, test]
-    if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+    if: github.event_name == 'pull_request'
 
     steps:
       - name: Download CI artifacts

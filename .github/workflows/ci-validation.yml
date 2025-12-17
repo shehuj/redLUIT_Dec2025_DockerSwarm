@@ -1,0 +1,159 @@
+name: CI Validation
+
+# Runs on all PRs and pushes to main
+# Validates code quality, security, and syntax
+
+on:
+  pull_request:
+    paths:
+      - 'ansible/**'
+      - 'docker-stack.yml'
+      - 'configs/**'
+      - 'monitoring-stack.yml'
+      - '.github/workflows/**'
+  push:
+    branches: ["main"]
+    paths:
+      - 'ansible/**'
+      - 'docker-stack.yml'
+      - 'configs/**'
+      - 'monitoring-stack.yml'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------
+  # Validate & Lint
+  # ----------------------------------------
+  validate:
+    name: Validate & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install validation tools
+        run: |
+          pip install --upgrade pip
+          pip install ansible ansible-lint yamllint
+
+      - name: Lint YAML files
+        run: yamllint -c .yamllint ansible/ docker-stack.yml configs/ monitoring-stack.yml
+
+      - name: Ansible Lint
+        run: ansible-lint ansible/playbooks/
+
+      - name: Save validation results
+        run: |
+          mkdir -p artifacts
+          echo "Validation passed at $(date)" > artifacts/validate.txt
+
+      - name: Upload validation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts-${{ github.run_id }}-validate
+          path: artifacts
+
+  # ----------------------------------------
+  # Security Scanning
+  # ----------------------------------------
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Trivy IaC Scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: config
+          scan-ref: '.'
+
+      - name: Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save security results
+        run: |
+          mkdir -p artifacts
+          echo "Security scan passed at $(date)" > artifacts/security.txt
+
+      - name: Upload security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts-${{ github.run_id }}-security
+          path: artifacts
+
+  # ----------------------------------------
+  # Test Ansible Syntax
+  # ----------------------------------------
+  test:
+    name: Ansible Syntax Check
+    runs-on: ubuntu-latest
+    needs: [validate, security]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Ansible and collections
+        run: |
+          pip install ansible
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Syntax check all playbooks
+        run: |
+          for playbook in ansible/playbooks/*.yml; do
+            echo "Checking $playbook"
+            ansible-playbook "$playbook" -i ansible/inventory.yml --syntax-check
+          done
+
+      - name: Save test results
+        run: |
+          mkdir -p artifacts
+          echo "Syntax tests passed at $(date)" > artifacts/test.txt
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts-${{ github.run_id }}-test
+          path: artifacts
+
+  # ----------------------------------------
+  # Summary
+  # ----------------------------------------
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [validate, security, test]
+    if: always()
+
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "### CI Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Validation: ${{ needs.validate.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Security: ${{ needs.security.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
