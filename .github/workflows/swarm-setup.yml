@@ -189,15 +189,13 @@ jobs:
 
       - name: Validate worker nodes
         run: |
-          ansible swarm_manager -i ansible/inventory.yml \
-            --private-key ~/.ssh/id_rsa \
-            -m command -a "docker node ls"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP \
+            "docker node ls"
 
       - name: Check worker node count
         run: |
-          WORKER_COUNT=$(ansible swarm_manager -i ansible/inventory.yml \
-            --private-key ~/.ssh/id_rsa \
-            -m command -a "docker node ls --filter role=worker --format '{{.ID}}'" | grep -c "^")
+          WORKER_COUNT=$(ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP \
+            "docker node ls --filter role=worker --format '{{.ID}}'" | wc -l)
           echo "Worker nodes found: $WORKER_COUNT"
           if [ "$WORKER_COUNT" -lt 1 ]; then
             echo "❌ No worker nodes found"
@@ -206,15 +204,13 @@ jobs:
 
       - name: Verify node labels
         run: |
-          ansible swarm_manager -i ansible/inventory.yml \
-            --private-key ~/.ssh/id_rsa \
-            -m command -a "docker node ls --format '{{.Hostname}} {{.ManagerStatus}} {{.Availability}}'"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP \
+            "docker node ls --format '{{.Hostname}} {{.ManagerStatus}} {{.Availability}}'"
 
       - name: Check node labels exist
         run: |
-          LABELED_WORKERS=$(ansible swarm_manager -i ansible/inventory.yml \
-            --private-key ~/.ssh/id_rsa \
-            -m shell -a "docker node inspect \$(docker node ls --filter role=worker --format '{{.ID}}') --format '{{.Spec.Labels}}'" | grep -c "type:worker" || echo "0")
+          LABELED_WORKERS=$(ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$SWARM_MANAGER_IP \
+            "docker node inspect \$(docker node ls --filter role=worker --format '{{.ID}}') --format '{{.Spec.Labels}}'" | grep -c "type:worker" || echo "0")
           echo "Workers with type=worker label: $LABELED_WORKERS"
 
   # ----------------------------------------
