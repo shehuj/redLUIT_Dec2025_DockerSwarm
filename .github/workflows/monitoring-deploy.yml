@@ -78,8 +78,7 @@ jobs:
 
       - name: Test SSH connectivity to monitoring server
         run: |
-          ssh -t -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP 
-          echo 'SSH OK'
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@$MONITORING_SERVER_IP "echo 'SSH OK'"
 
       - name: Install Ansible and dependencies
         run: |
