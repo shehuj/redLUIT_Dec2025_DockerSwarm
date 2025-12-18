@@ -1,6 +1,4 @@
 ---
-version: '3.8'
-
 services:
   # Prometheus for metrics collection
   prometheus:
