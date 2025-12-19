@@ -4,25 +4,25 @@ all:
       hosts:
         manager:
           ansible_python_interpreter: /usr/bin/python3
-          ansible_host: 54.236.57.201
+          ansible_host: 3.233.237.186
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
     swarm_workers:
       hosts:
         worker1:
           ansible_python_interpreter: /usr/bin/python3
-          ansible_host: 18.205.2.220
+          ansible_host: 98.80.212.154
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
         worker2:
           ansible_python_interpreter: /usr/bin/python3
-          ansible_host: 3.230.125.134
+          ansible_host: 3.238.185.15
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
 
         worker3:
           ansible_python_interpreter: /usr/bin/python3
-          ansible_host: 44.204.197.214
+          ansible_host: 52.3.231.23
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
 
@@ -30,6 +30,6 @@ all:
       hosts:
         monitoring_server:
           ansible_python_interpreter: /usr/bin/python3
-          ansible_host: 13.222.123.204
+          ansible_host: 98.80.212.154
           ansible_user: ubuntu
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
