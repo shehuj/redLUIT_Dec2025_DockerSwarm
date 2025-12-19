@@ -1,0 +1,17 @@
+---
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+filters:
+  instance-state-name: running
+  tag:Role: docker-swarm
+  tag:Environment: production
+keyed_groups:
+  - key: tags.SwarmRole
+    prefix: swarm
+    separator: '_'
+hostnames:
+  - public-ip-address
+compose:
+  ansible_host: public_ip_address
+  ansible_user: "'ubuntu'"

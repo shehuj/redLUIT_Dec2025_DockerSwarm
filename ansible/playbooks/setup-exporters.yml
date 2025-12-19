@@ -1,0 +1,181 @@
+---
+- name: Setup Exporters on Swarm Nodes
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Ensure Docker is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Pull Node Exporter image
+      ansible.builtin.command: docker pull prom/node-exporter:v1.7.0
+      register: node_exporter_pull
+      changed_when: "'Downloaded' in node_exporter_pull.stdout"
+
+    - name: Pull cAdvisor image
+      ansible.builtin.command: docker pull gcr.io/cadvisor/cadvisor:v0.47.2
+      register: cadvisor_pull
+      changed_when: "'Downloaded' in cadvisor_pull.stdout"
+
+    - name: Find ALL containers using port 8080
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | \
+        grep -E ':8080|8080/tcp' | \
+        awk '{print $1}' || true
+      register: port_8080_all_containers
+      changed_when: false
+
+    - name: Find ALL containers using port 9100
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Ports{{ '}}' }}" | \
+        grep -E ':9100|9100/tcp' | \
+        awk '{print $1}' || true
+      register: port_9100_all_containers
+      changed_when: false
+
+    - name: Display containers found on ports
+      ansible.builtin.debug:
+        msg:
+          - "Containers on port 8080: {{ port_8080_all_containers.stdout_lines }}"
+          - "Containers on port 9100: {{ port_9100_all_containers.stdout_lines }}"
+
+    - name: Force remove ALL containers on port 8080
+      ansible.builtin.command: docker rm -f {{ item }}
+      loop: "{{ port_8080_all_containers.stdout_lines }}"
+      when: port_8080_all_containers.stdout_lines | length > 0
+      failed_when: false
+
+    - name: Force remove ALL containers on port 9100
+      ansible.builtin.command: docker rm -f {{ item }}
+      loop: "{{ port_9100_all_containers.stdout_lines }}"
+      when: port_9100_all_containers.stdout_lines | length > 0
+      failed_when: false
+
+    - name: Remove containers by name (cadvisor, node-exporter)
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }}" | \
+        grep -iE 'cadvisor|node-exporter|mystack' | \
+        awk '{print $1}' | \
+        xargs -r docker rm -f || true
+      register: cleanup_by_name
+      changed_when: cleanup_by_name.stdout != ""
+
+    - name: Kill any process on port 8080 (non-Docker)
+      ansible.builtin.shell: |
+        lsof -ti:8080 | xargs -r kill -9 || true
+      failed_when: false
+      changed_when: false
+
+    - name: Kill any process on port 9100 (non-Docker)
+      ansible.builtin.shell: |
+        lsof -ti:9100 | xargs -r kill -9 || true
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for ports to be fully released
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Start Node Exporter container
+      ansible.builtin.command: >
+        docker run -d
+        --name node-exporter
+        --restart unless-stopped
+        --net="host"
+        --pid="host"
+        -v "/:/host:ro,rslave"
+        prom/node-exporter:v1.7.0
+        --path.rootfs=/host
+      register: node_exporter_start
+      changed_when: true
+
+    - name: Start cAdvisor container
+      ansible.builtin.command: >
+        docker run -d
+        --name cadvisor
+        --restart unless-stopped
+        --volume=/:/rootfs:ro
+        --volume=/var/run:/var/run:ro
+        --volume=/sys:/sys:ro
+        --volume=/var/lib/docker/:/var/lib/docker:ro
+        --volume=/dev/disk/:/dev/disk:ro
+        --publish=8080:8080
+        --detach=true
+        gcr.io/cadvisor/cadvisor:v0.47.2
+      register: cadvisor_start
+      changed_when: true
+
+    - name: Verify containers are running
+      ansible.builtin.command: docker ps --filter "name={{ item }}" --format "{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}"
+      loop:
+        - node-exporter
+        - cadvisor
+      register: container_status
+      changed_when: false
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "{{ container_status.results | map(attribute='stdout') | list }}"
+
+    - name: Wait for Node Exporter to be ready
+      ansible.builtin.wait_for:
+        port: 9100
+        delay: 2
+        timeout: 30
+
+    - name: Wait for cAdvisor to be ready
+      ansible.builtin.wait_for:
+        port: 8080
+        delay: 2
+        timeout: 30
+
+    - name: Verify Node Exporter is responding
+      ansible.builtin.uri:
+        url: "http://localhost:9100/metrics"
+        return_content: false
+        status_code: 200
+      register: node_exporter_health
+
+    - name: Verify cAdvisor is responding
+      ansible.builtin.uri:
+        url: "http://localhost:8080/metrics"
+        return_content: false
+        status_code: 200
+      register: cadvisor_health
+
+    - name: Display exporter status
+      ansible.builtin.debug:
+        msg:
+          - "Node Exporter: {{ 'Running' if node_exporter_health.status == 200 else 'Failed' }}"
+          - "cAdvisor: {{ 'Running' if cadvisor_health.status == 200 else 'Failed' }}"
+          - "Docker Metrics: Available on port 9323"
+
+- name: Display Exporters Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Show exporters information
+      ansible.builtin.debug:
+        msg: |
+          =========================================
+             Exporters Deployed Successfully!
+          =========================================
+
+          Swarm Manager:
+            • Node Exporter: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9100/metrics
+            • cAdvisor:      http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:8080/metrics
+            • Docker Metrics: http://{{ hostvars[groups['swarm_manager'][0]]['ansible_host'] }}:9323/metrics
+
+          Swarm Workers:
+          {% for host in groups['swarm_workers'] %}
+            {{ host }}:
+              • Node Exporter: http://{{ hostvars[host]['ansible_host'] }}:9100/metrics
+              • cAdvisor:      http://{{ hostvars[host]['ansible_host'] }}:8080/metrics
+              • Docker Metrics: http://{{ hostvars[host]['ansible_host'] }}:9323/metrics
+          {% endfor %}
+
+          These metrics are ready to be scraped by Prometheus
+          =========================================
