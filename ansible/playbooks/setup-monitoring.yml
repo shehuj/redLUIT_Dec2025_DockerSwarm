@@ -108,6 +108,21 @@
         dest: /opt/monitoring/configs/grafana-datasources.yml
         mode: '0644'
 
+    - name: Stop existing monitoring stack
+      ansible.builtin.command:
+        cmd: docker compose down
+        chdir: /opt/monitoring
+      failed_when: false
+      changed_when: false
+
+    - name: Remove any orphaned containers
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
+        grep -E 'prometheus|grafana|cadvisor|node-exporter' | \
+        xargs -r docker rm -f || true
+      failed_when: false
+      changed_when: false
+
     - name: Deploy monitoring stack
       ansible.builtin.command:
         cmd: docker compose up -d
