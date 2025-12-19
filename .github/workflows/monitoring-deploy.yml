@@ -213,7 +213,7 @@ jobs:
           echo "- **Prometheus**: http://${{ secrets.MONITORING_SERVER_IP }}:9090" >> $GITHUB_STEP_SUMMARY
           echo "- **Grafana**: http://${{ secrets.MONITORING_SERVER_IP }}:3000" >> $GITHUB_STEP_SUMMARY
           echo "  - Username: \`admin\`" >> $GITHUB_STEP_SUMMARY
-          echo "  - Password: \`change-me-in-production\`" >> $GITHUB_STEP_SUMMARY
+          echo "  - Password: \`admin123\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Access Grafana and change the default password" >> $GITHUB_STEP_SUMMARY

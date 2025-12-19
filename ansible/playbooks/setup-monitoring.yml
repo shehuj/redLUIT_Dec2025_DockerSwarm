@@ -1,4 +1,12 @@
 ---
+# Gather facts from all nodes first to get their IPs
+- name: Gather facts from all nodes
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Ensure facts are gathered
+      ansible.builtin.setup:
+
 - name: Setup Monitoring Server
   hosts: monitoring
   become: true
@@ -96,11 +104,12 @@
         dest: /opt/monitoring/docker-compose.yml
         mode: '0644'
 
-    - name: Copy Prometheus config
-      ansible.builtin.copy:
-        src: "../../configs/prometheus-monitoring.yml"
+    - name: Generate Prometheus config from template with all node IPs
+      ansible.builtin.template:
+        src: "../../configs/prometheus.yml.j2"
         dest: /opt/monitoring/configs/prometheus-monitoring.yml
         mode: '0644'
+      notify: Restart Prometheus
 
     - name: Copy Grafana datasources config
       ansible.builtin.copy:
@@ -108,21 +117,80 @@
         dest: /opt/monitoring/configs/grafana-datasources.yml
         mode: '0644'
 
-    - name: Stop existing monitoring stack
+    # ========================================
+    # Environment Cleanup and Prune
+    # ========================================
+    - name: Check for existing monitoring containers
+      ansible.builtin.shell: |
+        docker ps -a --filter "name=prometheus" --filter "name=grafana" \
+        --filter "name=cadvisor" --filter "name=node-exporter" \
+        --format "{{ '{{' }}.Names{{ '}}' }}" || true
+      register: existing_containers
+      changed_when: false
+      failed_when: false
+
+    - name: Display existing containers found
+      ansible.builtin.debug:
+        msg: "Found existing containers: {{ existing_containers.stdout_lines }}"
+      when: existing_containers.stdout_lines | length > 0
+
+    - name: Stop existing monitoring stack via compose
       ansible.builtin.command:
-        cmd: docker compose down
+        cmd: docker compose down --remove-orphans
         chdir: /opt/monitoring
       failed_when: false
       changed_when: false
 
-    - name: Remove any orphaned containers
+    - name: Stop and remove all monitoring-related containers
       ansible.builtin.shell: |
         docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
-        grep -E 'prometheus|grafana|cadvisor|node-exporter' | \
+        grep -E 'prometheus|grafana|cadvisor|node-exporter|monitoring' | \
+        xargs -r docker stop || true
+        docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
+        grep -E 'prometheus|grafana|cadvisor|node-exporter|monitoring' | \
         xargs -r docker rm -f || true
       failed_when: false
       changed_when: false
 
+    - name: Prune stopped containers
+      ansible.builtin.command:
+        cmd: docker container prune -f
+      register: container_prune
+      changed_when: "'deleted' in container_prune.stdout"
+
+    - name: Prune unused networks
+      ansible.builtin.command:
+        cmd: docker network prune -f
+      register: network_prune
+      changed_when: "'deleted' in network_prune.stdout"
+
+    - name: Prune unused volumes (keep named volumes)
+      ansible.builtin.command:
+        cmd: docker volume prune -f
+      register: volume_prune
+      changed_when: "'deleted' in volume_prune.stdout"
+
+    - name: Prune dangling images
+      ansible.builtin.command:
+        cmd: docker image prune -f
+      register: image_prune
+      changed_when: "'deleted' in image_prune.stdout"
+
+    - name: Display cleanup summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Docker Environment Cleanup Summary"
+          - "========================================="
+          - "Containers: {{ container_prune.stdout_lines | default(['No changes']) }}"
+          - "Networks: {{ network_prune.stdout_lines | default(['No changes']) }}"
+          - "Volumes: {{ volume_prune.stdout_lines | default(['No changes']) }}"
+          - "Images: {{ image_prune.stdout_lines | default(['No changes']) }}"
+          - "========================================="
+
+    # ========================================
+    # Deploy Fresh Monitoring Stack
+    # ========================================
     - name: Deploy monitoring stack
       ansible.builtin.command:
         cmd: docker compose up -d
@@ -176,4 +244,12 @@
           - "  Username: admin"
           - "  Password: change-me-in-production"
           - ""
+          - "Prometheus is now monitoring {{ groups['all'] | length }} nodes with all exporters"
           - "========================================="
+
+  handlers:
+    - name: Restart Prometheus
+      ansible.builtin.command:
+        cmd: docker compose restart prometheus
+        chdir: /opt/monitoring
+      failed_when: false
