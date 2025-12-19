@@ -56,8 +56,7 @@
           - "'Down' not in swarm_nodes.stdout"
         fail_msg: "One or more swarm nodes are down"
         success_msg: "All swarm nodes are ready"
-        fatal: false
-        continue_on_failure: true
+      ignore_errors: true
 
 - name: Summary
   hosts: localhost
