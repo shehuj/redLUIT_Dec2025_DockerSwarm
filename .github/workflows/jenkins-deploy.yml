@@ -1,9 +1,6 @@
 name: Jenkins CI/CD Stack Deployment
 
-# Deploys Jenkins CI/CD stack to Docker Swarm ONLY on merge to main
-# - Checks Docker Swarm is active
-# - Deploys Jenkins stack
-
+# Deploys the Jenkins CI/CD stack to Docker Swarm ONLY on merge to main
 on:
   push:
     branches: ["main"]
@@ -20,7 +17,7 @@ permissions:
 
 concurrency:
   group: jenkins-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   ANSIBLE_FORCE_COLOR: 'true'
@@ -39,26 +36,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.MANAGER_IP }} >> ~/.ssh/known_hosts
 
-      - name: Install Ansible
+      - name: Install Ansible & Dependencies
         run: |
+          python3 -m pip install --upgrade pip
           pip install ansible
           ansible-galaxy collection install -r ansible/requirements.yml
 
-      - name: Deploy Jenkins via Ansible
+      - name: Deploy Jenkins with Ansible
         run: |
           ansible-playbook -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
             ansible/playbooks/setup-jenkins.yml
 
-      - name: Wait for Jenkins to stabilize
+      - name: Wait for Jenkins to start
         run: sleep 45
 
   # ----------------------------------------
@@ -68,47 +68,44 @@ jobs:
     name: Validate Jenkins Deployment
     runs-on: ubuntu-latest
     needs: deploy-jenkins
-    if: always() && needs.deploy-jenkins.result == 'success'
+    if: needs.deploy-jenkins.result == 'success'
 
     steps:
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.MANAGER_IP }} >> ~/.ssh/known_hosts
 
       - name: Check Jenkins service status
         run: |
           echo "Checking Jenkins service..."
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "docker service ls --filter 'name=jenkins' --format '{{.Name}} {{.Replicas}}'"
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+            "docker service ls --filter name=jenkins --format '{{.Name}} {{.Replicas}}'"
 
-      - name: Verify Jenkins is accessible
+      - name: Verify Jenkins accessibility
         run: |
-          echo "Testing Jenkins accessibility..."
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "curl -f http://localhost:8081/login" && echo "✅ Jenkins is accessible" || \
-            (echo "❌ Jenkins is not accessible" && exit 1)
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+            "curl -f http://localhost:8081/login" && echo "✅ Jenkins accessible" || exit 1
 
-      - name: Get Jenkins initial admin password
+      - name: Retrieve Jenkins initial admin password
         id: jenkins_pwd
         run: |
-          echo "Retrieving Jenkins initial admin password..."
-          PASSWORD=$(ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            'docker exec $(docker ps -q -f name=jenkins_jenkins) cat /var/jenkins_home/secrets/initialAdminPassword' 2>/dev/null || echo "N/A")
+          PASSWORD=$(ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+            'docker exec $(docker ps -q -f name=jenkins_jenkins) \
+            cat /var/jenkins_home/secrets/initialAdminPassword' 2>/dev/null || echo "N/A")
           echo "password=$PASSWORD" >> $GITHUB_OUTPUT
-          echo "Password retrieved: ${PASSWORD:0:5}..." # Show first 5 chars only
+          echo "Partial password: ${PASSWORD:0:6}..."
 
       - name: Check Jenkins logs for errors
         run: |
-          echo "Checking Jenkins logs..."
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
             "docker service logs --tail 50 jenkins_jenkins" || true
 
       - name: Verify Jenkins service placement
         run: |
-          echo "Jenkins service placement:"
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
             "docker service ps jenkins_jenkins --format '{{.Node}} {{.CurrentState}}'"
 
   # ----------------------------------------
@@ -121,76 +118,48 @@ jobs:
     if: always()
 
     steps:
-      - name: Generate access information
+      - name: Write access info to summary
         run: |
           echo "### Jenkins CI/CD Stack Deployment Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Jenkins Deployment: ${{ needs.deploy-jenkins.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Jenkins Validation: ${{ needs.validate-jenkins.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Deployment: ${{ needs.deploy-jenkins.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Validation: ${{ needs.validate-jenkins.result }}" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.deploy-jenkins.result }}" == "success" ]; then
-            echo "### 🚀 Jenkins Access URLs" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- **Jenkins**: http://${{ secrets.MANAGER_IP }}:8081" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🔑 Initial Setup" >> $GITHUB_STEP_SUMMARY
-            echo "1. SSH into manager: \`ssh ubuntu@${{ secrets.MANAGER_IP }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "2. Get admin password: \`docker exec \$(docker ps -q -f name=jenkins) cat /var/jenkins_home/secrets/initialAdminPassword\`" >> $GITHUB_STEP_SUMMARY
-            echo "3. Access Jenkins and complete setup wizard" >> $GITHUB_STEP_SUMMARY
-            echo "4. Install suggested plugins" >> $GITHUB_STEP_SUMMARY
-            echo "5. Create your first admin user" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 📊 Deployed Services" >> $GITHUB_STEP_SUMMARY
-            echo "- Jenkins Master (on manager node)" >> $GITHUB_STEP_SUMMARY
-            echo "- Jenkins Agents (on all worker nodes)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔗 Access Jenkins" >> $GITHUB_STEP_SUMMARY
+            echo "- URL: http://${{ secrets.MANAGER_IP }}:8081" >> $GITHUB_STEP_SUMMARY
+            echo "- Initial admin password stored in outputs" >> $GITHUB_STEP_SUMMARY
           else
-            echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
-            echo "Please check the logs for details" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Deployment failed. Check logs above." >> $GITHUB_STEP_SUMMARY
           fi
 
   # ----------------------------------------
-  # Comprehensive Stack Health Check
+  # Health Check Summary
   # ----------------------------------------
   final-health-check:
     name: Final Stack Health Check
     runs-on: ubuntu-latest
-    needs: [deploy-jenkins, validate-jenkins]
-    if: always() && needs.deploy-jenkins.result == 'success'
+    needs: validate-jenkins
+    if: needs.deploy-jenkins.result == 'success'
 
     steps:
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.MANAGER_IP }} >> ~/.ssh/known_hosts
 
-      - name: Check all running stacks
+      - name: Check Docker stacks
         run: |
-          echo "========================================="
-          echo "All Docker Stacks:"
-          echo "========================================="
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "docker stack ls"
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} "docker stack ls"
 
-      - name: Check all services across cluster
+      - name: Check all cluster services
         run: |
-          echo "========================================="
-          echo "All Services in Cluster:"
-          echo "========================================="
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "docker service ls"
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} "docker service ls"
 
-      - name: Final health summary
+      - name: Add health summary
         run: |
-          echo "### 🏥 Final Cluster Health Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "docker node ls" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Jenkins deployment complete!" >> $GITHUB_STEP_SUMMARY
-          echo "✅ All infrastructure validated" >> $GITHUB_STEP_SUMMARY
-          echo "✅ CI/CD pipeline ready for use" >> $GITHUB_STEP_SUMMARY
+          echo "### 🩺 Cluster Health Summary" >> $GITHUB_STEP_SUMMARY
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} "docker node ls" >> $GITHUB_STEP_SUMMARY
