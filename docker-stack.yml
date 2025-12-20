@@ -140,7 +140,7 @@ services:
 
   # Visualizer for Swarm
   visualizer:
-    image: dockersamples/visualizer:latest
+    image: dockersamples/visualizer:0.9.8
     deploy:
       replicas: 1
       placement:

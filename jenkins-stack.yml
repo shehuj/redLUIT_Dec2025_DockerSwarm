@@ -43,7 +43,7 @@ services:
 
   # Jenkins Agent (optional - for distributed builds)
   jenkins-agent:
-    image: jenkins/inbound-agent:latest
+    image: jenkins/inbound-agent:3206.vb_15dcf73f6a_9-3
     environment:
       - JENKINS_URL=http://jenkins:8080
       - JENKINS_AGENT_NAME=swarm-agent-1
