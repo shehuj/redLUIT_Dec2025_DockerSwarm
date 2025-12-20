@@ -141,7 +141,7 @@
 
   vars:
     jenkins_home: /var/jenkins_home
-    jenkins_port: 8080
+    jenkins_port: 8081
     jenkins_agent_port: 50000
 
   tasks:

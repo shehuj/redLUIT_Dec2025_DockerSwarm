@@ -204,7 +204,7 @@ jobs:
         run: |
           echo "Testing Jenkins accessibility..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "curl -f http://localhost:8080/login" && echo "✅ Jenkins is accessible" || \
+            "curl -f http://localhost:8081/login" && echo "✅ Jenkins is accessible" || \
             (echo "❌ Jenkins is not accessible" && exit 1)
 
       - name: Get Jenkins initial admin password
@@ -250,7 +250,7 @@ jobs:
           if [ "${{ needs.deploy-jenkins.result }}" == "success" ]; then
             echo "### 🚀 Jenkins Access URLs" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- **Jenkins**: http://${{ secrets.MANAGER_IP }}:8080" >> $GITHUB_STEP_SUMMARY
+            echo "- **Jenkins**: http://${{ secrets.MANAGER_IP }}:8081" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🔑 Initial Setup" >> $GITHUB_STEP_SUMMARY
             echo "1. SSH into manager: \`ssh ubuntu@${{ secrets.MANAGER_IP }}\`" >> $GITHUB_STEP_SUMMARY
