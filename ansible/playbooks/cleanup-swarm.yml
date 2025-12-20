@@ -18,10 +18,17 @@
           - "   Swarm Cleanup Starting"
           - "========================================="
           - "This will remove:"
-          - "  • All Docker stacks"
-          - "  • All standalone containers"
+          - "  • All Docker stacks (manager)"
+          - "  • All standalone containers (all nodes)"
+          - "  • Monitoring stack (monitoring server)"
+          - "  • Exporters (all nodes)"
           - "  • Unused volumes and networks"
           - "  • Dangling images"
+          - ""
+          - "Targets:"
+          - "  • Manager node"
+          - "  • Worker nodes"
+          - "  • Monitoring server"
           - ""
           - "This will preserve:"
           - "  ✓ Docker Swarm cluster"
@@ -189,6 +196,83 @@
     - name: Display worker cleanup summary
       ansible.builtin.debug:
         msg: "Worker {{ inventory_hostname }} cleaned up successfully"
+
+# ========================================
+# Clean Up Monitoring Server
+# ========================================
+- name: Cleanup Monitoring Server
+  hosts: monitoring
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check if monitoring directory exists
+      ansible.builtin.stat:
+        path: /opt/monitoring
+      register: monitoring_dir
+
+    - name: Stop monitoring stack via docker compose
+      ansible.builtin.command:
+        cmd: docker compose down --remove-orphans
+        chdir: /opt/monitoring
+      when: monitoring_dir.stat.exists
+      register: compose_down
+      changed_when: compose_down.rc == 0
+      failed_when: false
+
+    - name: Stop all monitoring containers
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
+        grep -E 'prometheus|grafana|cadvisor|node-exporter|alertmanager' | \
+        xargs -r docker stop || true
+      changed_when: false
+      failed_when: false
+
+    - name: Remove all monitoring containers
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
+        grep -E 'prometheus|grafana|cadvisor|node-exporter|alertmanager' | \
+        xargs -r docker rm -f || true
+      register: monitoring_containers_removed
+      changed_when: monitoring_containers_removed.rc == 0
+      failed_when: false
+
+    - name: Stop any remaining containers on monitoring server
+      ansible.builtin.shell: |
+        docker ps -q | xargs -r docker stop || true
+      changed_when: false
+      failed_when: false
+
+    - name: Remove all containers on monitoring server
+      ansible.builtin.shell: |
+        docker ps -a -q | xargs -r docker rm -f || true
+      register: all_monitoring_containers_removed
+      changed_when: all_monitoring_containers_removed.rc == 0
+      failed_when: false
+
+    - name: Prune volumes on monitoring server
+      ansible.builtin.command: docker volume prune -f
+      register: monitoring_volumes_pruned
+      changed_when: "'Total reclaimed space' in monitoring_volumes_pruned.stdout"
+
+    - name: Prune networks on monitoring server
+      ansible.builtin.command: docker network prune -f
+      register: monitoring_networks_pruned
+      changed_when: "'Total reclaimed space' in monitoring_networks_pruned.stdout"
+
+    - name: Prune images on monitoring server
+      ansible.builtin.command: docker image prune -f
+      register: monitoring_images_pruned
+      changed_when: "'Total reclaimed space' in monitoring_images_pruned.stdout"
+
+    - name: Display monitoring server cleanup summary
+      ansible.builtin.debug:
+        msg:
+          - "Monitoring Server Cleanup:"
+          - "  Containers: Removed"
+          - "  Volumes: {{ monitoring_volumes_pruned.stdout_lines | default(['No changes']) }}"
+          - "  Networks: {{ monitoring_networks_pruned.stdout_lines | default(['No changes']) }}"
+          - "  Images: {{ monitoring_images_pruned.stdout_lines | default(['No changes']) }}"
 
 # ========================================
 # Final Verification
