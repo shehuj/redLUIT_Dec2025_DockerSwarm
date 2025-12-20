@@ -106,18 +106,20 @@
     # ========================================
     # Validate Jenkins Deployment
     # ========================================
-    - name: Wait for Jenkins container to be running
-      ansible.builtin.shell: docker ps --filter "name=jenkins_jenkins" --format "{{ '{{' }}.Status{{ '}}' }}" | grep -i "up" || echo "not running"
+    - name: Check Jenkins container status
+      ansible.builtin.shell: docker ps -a --filter "name=jenkins_jenkins" --format "{{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}" || echo "No container found"
       register: container_status
-      until: "'Up' in container_status.stdout"
-      retries: 60
-      delay: 5
       changed_when: false
       failed_when: false
 
-    - name: Display container status
+    - name: Display Jenkins container status
       ansible.builtin.debug:
-        msg: "Jenkins container status: {{ container_status.stdout }}"
+        msg:
+          - "========================================="
+          - "   Jenkins Container Status"
+          - "========================================="
+          - "{{ container_status.stdout }}"
+          - "========================================="
 
     - name: Get Jenkins service logs for diagnostics
       ansible.builtin.command: docker service logs --tail 50 jenkins_jenkins
@@ -127,7 +129,12 @@
 
     - name: Display recent Jenkins logs
       ansible.builtin.debug:
-        msg: "{{ jenkins_logs.stdout_lines[-10:] if jenkins_logs.stdout_lines | length > 0 else 'No logs available' }}"
+        msg:
+          - "========================================="
+          - "   Recent Jenkins Logs (Last 10 lines)"
+          - "========================================="
+          - "{{ jenkins_logs.stdout_lines[-10:] | default(['No logs available']) | join('\n') }}"
+          - "========================================="
 
     - name: Check if Jenkins port is listening
       ansible.builtin.wait_for:
