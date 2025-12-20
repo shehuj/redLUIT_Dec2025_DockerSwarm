@@ -1,23 +1,17 @@
 name: CI Validation
 
-# Runs on all PRs and pushes to main
+# Runs on all pushes to dev and main
 # Validates code quality, security, and syntax
 
 on:
-  pull_request:
-    paths:
-      - 'ansible/**'
-      - 'docker-stack.yml'
-      - 'configs/**'
-      - 'monitoring-stack.yml'
-      - '.github/workflows/**'
   push:
-    branches: ["main"]
+    branches: ["dev", "main"]
     paths:
       - 'ansible/**'
       - 'docker-stack.yml'
       - 'configs/**'
       - 'monitoring-stack.yml'
+      - 'jenkins-stack.yml'
       - '.github/workflows/**'
 
 permissions:
