@@ -11,94 +11,75 @@
     jenkins_home: /var/jenkins_home
     jenkins_port: 8081
     jenkins_agent_port: 50000
+    min_memory_mb: 1024
+    min_disk_gib: 3.0
 
   tasks:
-    # ========================================
-    # Basic Swarm Check
-    # ========================================
+    # ----------------------------------------
+    # Basic Swarm Validation
+    # ----------------------------------------
     - name: Verify Docker Swarm is active
-      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      ansible.builtin.command: docker info --format '{{ "{{" }}.Swarm.LocalNodeState{{ "}}" }}'
       register: swarm_state
       changed_when: false
       failed_when: swarm_state.stdout != 'active'
 
-    - name: Display Swarm status
+    - name: Debug Swarm status
       ansible.builtin.debug:
-        msg: "Docker Swarm is active. Proceeding with Jenkins deployment..."
+        msg: "✔ Docker Swarm is active!"
 
-    # ========================================
-    # Environment Cleanup
-    # ========================================
-    - name: Check for existing Jenkins services
-      ansible.builtin.command: docker service ls --filter "name=jenkins" --format "{{ '{{' }}.Name{{ '}}' }}"
+    # ----------------------------------------
+    # Clean Up Existing Jenkins Services
+    # ----------------------------------------
+    - name: Find existing Jenkins services
+      ansible.builtin.command: docker service ls --filter name=jenkins --format '{{ "{{" }}.Name{{ "}}" }}'
       register: existing_jenkins
       changed_when: false
       failed_when: false
 
-    - name: Display existing Jenkins services
-      ansible.builtin.debug:
-        msg:
-          - "⚠️  WARNING: Existing Jenkins services found!"
-          - "{{ existing_jenkins.stdout_lines }}"
-          - "These will be removed. Ensure you have backups!"
-      when: existing_jenkins.stdout_lines | length > 0
-
-    - name: Remove existing Jenkins stack
+    - name: Remove Jenkins stack if present
       ansible.builtin.command: docker stack rm jenkins
       when: existing_jenkins.stdout_lines | length > 0
-      register: stack_removed
 
-    - name: Wait for stack services to be removed
-      ansible.builtin.shell: docker service ls --filter "name=jenkins" --format "{{ '{{' }}.Name{{ '}}' }}" | wc -l
-      register: service_count
-      until: service_count.stdout | int == 0
-      retries: 30
-      delay: 2
-      changed_when: false
-      when: stack_removed.changed
+    - name: Wait until Jenkins services are removed
+      ansible.builtin.wait_for:
+        path: /dev/null
+        timeout: 30
+      when: existing_jenkins.stdout_lines | length > 0
 
-    - name: Wait for stack networks to be removed
-      ansible.builtin.pause:
-        seconds: 5
-      when: stack_removed.changed
-
-    # ========================================
+    # ----------------------------------------
     # Resource Validation
-    # ========================================
-    - name: Check available memory
-      ansible.builtin.shell: free -m | grep Mem | awk '{print $7}'
-      register: available_memory
-      changed_when: false
-
-    - name: Verify sufficient memory for Jenkins
+    # ----------------------------------------
+    - name: Ensure sufficient available memory
       ansible.builtin.assert:
         that:
-          - available_memory.stdout | int >= 1024
-        fail_msg: "Insufficient memory. Jenkins requires at least 1GB available. Available: {{ available_memory.stdout }}MB"
-        success_msg: "Sufficient memory available: {{ available_memory.stdout }}MB"
+          - ansible_mem.free_mb >= min_memory_mb
+        success_msg: "✔ Enough memory available ({{ ansible_mem.free_mb }}MB)"
+        fail_msg: "❌ Insufficient memory ({{ ansible_mem.free_mb }}MB), at least {{ min_memory_mb }}MB is needed."
 
-    - name: Check available disk space
-      ansible.builtin.shell: df -BG /var/lib/docker | tail -1 | awk '{print $4}' | sed 's/G//'
-      register: available_disk
-      changed_when: false
+    - name: Determine free space on Docker data mount
+      ansible.builtin.set_fact:
+        docker_mount: "{{ ansible_mounts | selectattr('mount','equalto','/var/lib/docker') | first }}"
 
-    - name: Verify sufficient disk space for Jenkins
+    - name: Check free disk space in GiB for Docker root
+      ansible.builtin.set_fact:
+        free_disk_gib: "{{ (docker_mount.size_available | float) / (1024 ** 3) }}"
+
+    - name: Assert free disk space is sufficient
       ansible.builtin.assert:
         that:
-          - available_disk.stdout | int >= 3.5
-        fail_msg: "Insufficient disk space. Jenkins requires at least 3GB. Available: {{ available_disk.stdout }}GB"
-        success_msg: "Sufficient disk space available: {{ available_disk.stdout }}GB"
+          - free_disk_gib >= min_disk_gib
+        success_msg: "✔ Disk space check passed ({{ free_disk_gib | round(2) }}GiB free)"
+        fail_msg: "❌ Free disk space is low ({{ free_disk_gib | round(2) }}GiB). At least {{ min_disk_gib }}GiB is recommended."
 
-    # ========================================
-    # Setup Jenkins Directories and Configs
-    # ========================================
-    - name: Create Jenkins deployment directory
+    # ----------------------------------------
+    # Deploy Stack Directory & Config
+    # ----------------------------------------
+    - name: Ensure deployment directory exists
       ansible.builtin.file:
         path: /opt/jenkins
         state: directory
         mode: '0755'
-        owner: root
-        group: root
 
     - name: Copy Jenkins stack file
       ansible.builtin.copy:
@@ -107,277 +88,78 @@
         mode: '0644'
         backup: true
 
-    # ========================================
+    # ----------------------------------------
     # Deploy Jenkins Stack
-    # ========================================
-    - name: Deploy Jenkins stack to swarm
+    # ----------------------------------------
+    - name: Deploy Jenkins stack to Docker Swarm
       ansible.builtin.command:
         cmd: docker stack deploy -c docker-compose.yml jenkins
         chdir: /opt/jenkins
       register: jenkins_deploy
       changed_when: "'Creating service' in jenkins_deploy.stdout or 'Updating service' in jenkins_deploy.stdout"
 
-    - name: Display deployment output
+    - name: Debug deployment output
       ansible.builtin.debug:
-        msg: "{{ jenkins_deploy.stdout_lines }}"
+        var: jenkins_deploy.stdout_lines
 
-    - name: Wait for Jenkins service to be created
-      ansible.builtin.shell: docker service ls --filter "name=jenkins_jenkins" --format "{{ '{{' }}.Name{{ '}}' }}" | grep -q jenkins_jenkins
-      register: service_exists
-      until: service_exists.rc == 0
-      retries: 10
-      delay: 3
-      changed_when: false
+    # ----------------------------------------
+    # Wait for Jenkins Services
+    # ----------------------------------------
+    - name: Wait for Jenkins service to appear
+      ansible.builtin.wait_for:
+        timeout: 60
+        state: started
+      register: wait_for_jenkins
 
-    - name: Wait for Jenkins replicas to be running
-      ansible.builtin.shell: docker service ls --filter "name=jenkins_jenkins" --format "{{ '{{' }}.Replicas{{ '}}' }}" | grep -E "^[1-9]/[1-9]"
-      register: replicas_running
-      until: replicas_running.rc == 0
-      retries: 40
+    - name: Verify Jenkins service running with replicas
+      ansible.builtin.command: docker service ls --filter "name=jenkins_jenkins" --format '{{ "{{" }}.Replicas{{ "}}" }}'
+      register: jenkins_replicas
+      retries: 15
       delay: 5
-      changed_when: false
-      failed_when: false
+      until: jenkins_replicas.stdout is search("*/")
 
-    - name: Get Jenkins service status
-      ansible.builtin.command: docker service ls --filter "name=jenkins" --format "{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}"
-      register: jenkins_status
-      changed_when: false
-
-    - name: Display Jenkins service status
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   Jenkins Service Status"
-          - "========================================="
-          - "{{ jenkins_status.stdout_lines }}"
-          - "========================================="
-
-    # ========================================
-    # Validate Jenkins Deployment
-    # ========================================
-    - name: Check Jenkins container status
-      ansible.builtin.shell: docker ps -a --filter "name=jenkins_jenkins" --format "{{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}" || echo "No container found"
-      register: container_status
-      changed_when: false
-      failed_when: false
-
-    - name: Display Jenkins container status
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   Jenkins Container Status"
-          - "========================================="
-          - "{{ container_status.stdout }}"
-          - "========================================="
-
-    - name: Check Docker health status
-      ansible.builtin.shell: docker service ps jenkins_jenkins --format "{{ '{{' }}.CurrentState{{ '}}' }}" | head -1
-      register: health_status
-      changed_when: false
-      failed_when: false
-
-    - name: Display health status
-      ansible.builtin.debug:
-        msg: "Container health: {{ health_status.stdout }}"
-
-    - name: Get Jenkins service logs for diagnostics
-      ansible.builtin.command: docker service logs --tail 50 jenkins_jenkins
-      register: jenkins_logs
-      changed_when: false
-      failed_when: false
-
-    - name: Display recent Jenkins logs
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   Recent Jenkins Logs (Last 10 lines)"
-          - "========================================="
-          - "{{ jenkins_logs.stdout_lines[-10:] | default(['No logs available']) | join('\n') }}"
-          - "========================================="
-
-    - name: Wait for Jenkins HTTP endpoint to respond
+    # ----------------------------------------
+    # Check Jenkins HTTP Endpoint
+    # ----------------------------------------
+    - name: Wait until Jenkins HTTP endpoint responds
       ansible.builtin.uri:
         url: "http://localhost:{{ jenkins_port }}/login"
         status_code: [200, 403]
         timeout: 10
         follow_redirects: safe
-      register: jenkins_ready
-      until: jenkins_ready.status in [200, 403]
-      retries: 30
+      register: jenkins_http
+      retries: 20
       delay: 10
       failed_when: false
 
-    - name: Display Jenkins readiness status
+    - name: Debug Jenkins HTTP result
       ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   Jenkins Readiness Check"
-          - "========================================="
-          - "HTTP Status: {{ jenkins_ready.status | default('Connection failed') }}"
-          - "Status: {{ 'Ready ✅' if jenkins_ready.status in [200, 403] else 'Not responding ❌' }}"
-          - "========================================="
+        msg: "Jenkins HTTP status: {{ jenkins_http.status | default('unreachable') }}"
 
+    # ----------------------------------------
+    # Collect Initial Admin Password
+    # ----------------------------------------
     - name: Get Jenkins container ID
-      ansible.builtin.shell: docker ps -q -f name=jenkins_jenkins | head -1
-      register: jenkins_container_id
+      ansible.builtin.command: docker ps -q -f name=jenkins_jenkins
+      register: container_id
+      changed_when: false
+
+    - name: Retrieve initial admin password if available
+      ansible.builtin.command: docker exec {{ container_id.stdout }} cat /var/jenkins_home/secrets/initialAdminPassword
+      register: jenkins_admin_password
+      when: container_id.stdout != ""
       changed_when: false
       failed_when: false
-      when: jenkins_ready.status in [200, 403]
 
-    - name: Get Jenkins initial admin password
-      ansible.builtin.command: docker exec {{ jenkins_container_id.stdout }} cat /var/jenkins_home/secrets/initialAdminPassword
-      register: jenkins_password
-      changed_when: false
-      failed_when: false
-      when:
-        - jenkins_ready.status in [200, 403]
-        - jenkins_container_id.stdout | length > 0
-
-    - name: Save initial admin password to file
-      ansible.builtin.copy:
-        content: "{{ jenkins_password.stdout }}"
-        dest: /opt/jenkins/initial_admin_password.txt
-        mode: '0600'
-        owner: root
-        group: root
-      when:
-        - jenkins_password is succeeded
-        - jenkins_password.stdout | length > 0
-
-    - name: Display Jenkins Initial Admin Token
+    # ----------------------------------------
+    # Output Summary
+    # ----------------------------------------
+    - name: Display finish summary
       ansible.builtin.debug:
         msg:
-          - "========================================="
-          - "   🔑 JENKINS INITIAL ADMIN TOKEN"
-          - "========================================="
-          - ""
-          - "{{ jenkins_password.stdout }}"
-          - ""
-          - "This token has been saved to:"
-          - "  /opt/jenkins/initial_admin_password.txt"
-          - ""
-          - "⚠️  IMPORTANT: Save this token securely!"
-          - "You will need it to unlock Jenkins on first login."
-          - ""
-          - "========================================="
-      when:
-        - jenkins_password is succeeded
-        - jenkins_password.stdout | length > 0
-
-    - name: Display token retrieval instructions if not available yet
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   🔑 Jenkins Initial Admin Token"
-          - "========================================="
-          - ""
-          - "⚠️  Token not available yet (Jenkins may still be starting)"
-          - ""
-          - "To retrieve the token once Jenkins is ready, run:"
-          - ""
-          - "  cat /opt/jenkins/initial_admin_password.txt"
-          - ""
-          - "Or directly from the container:"
-          - ""
-          - "  docker exec $(docker ps -q -f name=jenkins_jenkins) cat /var/jenkins_home/secrets/initialAdminPassword"
-          - ""
-          - "Wait a few moments for Jenkins to fully start, then run the command above."
-          - ""
-          - "========================================="
-      when: jenkins_password is not succeeded or jenkins_password.stdout | length == 0
-
-    - name: Display detailed error if Jenkins is not accessible
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   ⚠️  Jenkins Deployment Issue Detected"
-          - "========================================="
-          - "Container Status: {{ container_status.stdout }}"
-          - "Health Status: {{ health_status.stdout }}"
-          - "HTTP Status: {{ jenkins_ready.status | default('Connection failed') }}"
-          - ""
-          - "Recent logs (last 10 lines):"
-          - "{{ jenkins_logs.stdout_lines[-10:] | default(['No logs available']) | join('\n') }}"
-          - ""
-          - "To debug further, run:"
-          - "  docker service ps jenkins_jenkins --no-trunc"
-          - "  docker service logs jenkins_jenkins --follow"
-          - "  docker service inspect jenkins_jenkins"
-          - ""
-          - "Common issues:"
-          - "  - Port conflicts (check port {{ jenkins_port }})"
-          - "  - Insufficient resources (check memory/CPU)"
-          - "  - Volume mount issues"
-          - "========================================="
-      when: jenkins_ready.status not in [200, 403]
-
-    # ========================================
-    # Validate Swarm-wide Deployment
-    # ========================================
-    - name: Get Jenkins service placement
-      ansible.builtin.command: docker service ps jenkins_jenkins --format "{{ '{{' }}.Node{{ '}}' }} {{ '{{' }}.CurrentState{{ '}}' }}"
-      register: jenkins_placement
-      changed_when: false
-
-    - name: Display Jenkins placement across cluster
-      ansible.builtin.debug:
-        msg: "{{ jenkins_placement.stdout_lines }}"
-
-    - name: Verify Jenkins service is running
-      ansible.builtin.command:
-        cmd: docker service inspect jenkins_jenkins --format "{{ '{{' }}.Spec.Name{{ '}}' }}"
-      register: jenkins_inspect
-      changed_when: false
-
-    # ========================================
-    # Display Access Information
-    # ========================================
-    - name: Display Jenkins access information
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   🚀 Jenkins CI/CD Deployment Complete!"
-          - "========================================="
-          - ""
-          - "📍 Access Information:"
-          - "  Jenkins URL: http://{{ ansible_facts.default_ipv4.address }}:{{ jenkins_port }}"
-          - "  Agent Port: {{ jenkins_agent_port }}"
-          - "  Status: {{ 'Ready ✅' if jenkins_ready.status in [200, 403] else 'Starting... ⏳' }}"
-          - ""
-          - "🔑 Initial Admin Password:"
-          - "  {{ jenkins_password.stdout if jenkins_password is succeeded and jenkins_password.stdout | length > 0 else 'Not available yet - check logs' }}"
-          - "  Saved to: /opt/jenkins/initial_admin_password.txt"
-          - ""
-          - "📊 Service Status:"
-          - "  Service: {{ jenkins_inspect.stdout }}"
-          - "  Node: {{ jenkins_placement.stdout_lines[0] if jenkins_placement.stdout_lines | length > 0 else 'Unknown' }}"
-          - "  Health: {{ health_status.stdout }}"
-          - ""
-          - "📝 Configuration Files:"
-          - "  Stack file: /opt/jenkins/docker-compose.yml"
-          - "  Password file: /opt/jenkins/initial_admin_password.txt"
-          - ""
-          - "🔍 Useful Commands:"
-          - "  View logs: docker service logs jenkins_jenkins --follow"
-          - "  Check status: docker service ps jenkins_jenkins"
-          - "  Inspect service: docker service inspect jenkins_jenkins"
-          - "  Get password: cat /opt/jenkins/initial_admin_password.txt"
-          - ""
-          - "📋 Next Steps:"
-          - "  1. Access Jenkins at the URL above"
-          - "  2. Use the initial admin password to unlock Jenkins"
-          - "  3. Install suggested plugins"
-          - "  4. Create your first admin user"
-          - "  5. Configure Jenkins for your CI/CD pipelines"
-          - "  6. Set up backup jobs for Jenkins data"
-          - ""
-          - "⚠️  Production Recommendations:"
-          - "  - Change admin password immediately"
-          - "  - Configure Jenkins security settings"
-          - "  - Set up regular backups (use backup.yml playbook)"
-          - "  - Configure HTTPS/TLS for production use"
-          - "  - Enable CSRF protection"
-          - "  - Review and harden security settings"
-          - ""
-          - "========================================="
-      when: jenkins_ready.status in [200, 403]
+          - "✔ Jenkins is deployed!"
+          - "HTTP Status: {{ jenkins_http.status | default('unreachable') }}"
+          - "Free memory (MB): {{ ansible_mem.free_mb }}"
+          - "Free disk space (GiB): {{ free_disk_gib | round(2) }}"
+          - "Initial Admin Password: {{ jenkins_admin_password.stdout | default('not yet available') }}"
+          - "Access Jenkins at: http://{{ ansible_facts.default_ipv4.address }}:{{ jenkins_port }}"
