@@ -25,6 +25,7 @@ env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  SWARM_MANAGER_IP: ${{ secrets.SWARM_MANAGER_IP }}
   SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
 
 jobs:
@@ -36,6 +37,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Verify Required Secrets
+        run: |
+          if [ -z "$SWARM_MANAGER_IP" ]; then
+            echo "❌ Missing SWARM_MANAGER_IP secret"
+            exit 1
+          fi
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "❌ Missing SSH_PRIVATE_KEY secret"
+            exit 1
+          fi
+          echo "✅ Required secrets are configured"
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -44,7 +57,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.MANAGER_IP }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
 
       - name: Install Ansible & Dependencies
         run: |
@@ -76,23 +89,23 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.MANAGER_IP }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
 
       - name: Check Jenkins service status
         run: |
           echo "Checking Jenkins service..."
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
             "docker service ls --filter name=jenkins --format '{{.Name}} {{.Replicas}}'"
 
       - name: Verify Jenkins accessibility
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
             "curl -f http://localhost:8081/login" && echo "✅ Jenkins accessible" || exit 1
 
       - name: Retrieve Jenkins initial admin password
         id: jenkins_pwd
         run: |
-          PASSWORD=$(ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+          PASSWORD=$(ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
             'docker exec $(docker ps -q -f name=jenkins_jenkins) \
             cat /var/jenkins_home/secrets/initialAdminPassword' 2>/dev/null || echo "N/A")
           echo "password=$PASSWORD" >> $GITHUB_OUTPUT
@@ -100,12 +113,12 @@ jobs:
 
       - name: Check Jenkins logs for errors
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
             "docker service logs --tail 50 jenkins_jenkins" || true
 
       - name: Verify Jenkins service placement
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
             "docker service ps jenkins_jenkins --format '{{.Node}} {{.CurrentState}}'"
 
   # ----------------------------------------
@@ -127,7 +140,7 @@ jobs:
           if [ "${{ needs.deploy-jenkins.result }}" == "success" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🔗 Access Jenkins" >> $GITHUB_STEP_SUMMARY
-            echo "- URL: http://${{ secrets.MANAGER_IP }}:8081" >> $GITHUB_STEP_SUMMARY
+            echo "- URL: http://${{ secrets.SWARM_MANAGER_IP }}:8081" >> $GITHUB_STEP_SUMMARY
             echo "- Initial admin password stored in outputs" >> $GITHUB_STEP_SUMMARY
           else
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -149,17 +162,17 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.MANAGER_IP }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
 
       - name: Check Docker stacks
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} "docker stack ls"
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} "docker stack ls"
 
       - name: Check all cluster services
         run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} "docker service ls"
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} "docker service ls"
 
       - name: Add health summary
         run: |
           echo "### 🩺 Cluster Health Summary" >> $GITHUB_STEP_SUMMARY
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} "docker node ls" >> $GITHUB_STEP_SUMMARY
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} "docker node ls" >> $GITHUB_STEP_SUMMARY
