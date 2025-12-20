@@ -244,6 +244,48 @@
         - jenkins_password is succeeded
         - jenkins_password.stdout | length > 0
 
+    - name: Display Jenkins Initial Admin Token
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   🔑 JENKINS INITIAL ADMIN TOKEN"
+          - "========================================="
+          - ""
+          - "{{ jenkins_password.stdout }}"
+          - ""
+          - "This token has been saved to:"
+          - "  /opt/jenkins/initial_admin_password.txt"
+          - ""
+          - "⚠️  IMPORTANT: Save this token securely!"
+          - "You will need it to unlock Jenkins on first login."
+          - ""
+          - "========================================="
+      when:
+        - jenkins_password is succeeded
+        - jenkins_password.stdout | length > 0
+
+    - name: Display token retrieval instructions if not available yet
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   🔑 Jenkins Initial Admin Token"
+          - "========================================="
+          - ""
+          - "⚠️  Token not available yet (Jenkins may still be starting)"
+          - ""
+          - "To retrieve the token once Jenkins is ready, run:"
+          - ""
+          - "  cat /opt/jenkins/initial_admin_password.txt"
+          - ""
+          - "Or directly from the container:"
+          - ""
+          - "  docker exec $(docker ps -q -f name=jenkins_jenkins) cat /var/jenkins_home/secrets/initialAdminPassword"
+          - ""
+          - "Wait a few moments for Jenkins to fully start, then run the command above."
+          - ""
+          - "========================================="
+      when: jenkins_password is not succeeded or jenkins_password.stdout | length == 0
+
     - name: Display detailed error if Jenkins is not accessible
       ansible.builtin.debug:
         msg:
