@@ -1,0 +1,238 @@
+---
+# Cleanup all swarm deployments while keeping the swarm cluster intact
+# - Removes all stacks
+# - Stops exporter containers
+# - Cleans volumes and networks
+# - Keeps swarm running and Docker installed
+
+- name: Cleanup Docker Swarm Deployments
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Display cleanup plan
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Swarm Cleanup Starting"
+          - "========================================="
+          - "This will remove:"
+          - "  • All Docker stacks"
+          - "  • All standalone containers"
+          - "  • Unused volumes and networks"
+          - "  • Dangling images"
+          - ""
+          - "This will preserve:"
+          - "  ✓ Docker Swarm cluster"
+          - "  ✓ Docker installation"
+          - "  ✓ Node configuration"
+          - "========================================="
+
+    # ========================================
+    # List Current Deployments
+    # ========================================
+    - name: List all current stacks
+      ansible.builtin.command: docker stack ls --format "{{ '{{' }}.Name{{ '}}' }}"
+      register: current_stacks
+      changed_when: false
+      failed_when: false
+
+    - name: Display current stacks
+      ansible.builtin.debug:
+        msg: "Found stacks: {{ current_stacks.stdout_lines }}"
+      when: current_stacks.stdout_lines | length > 0
+
+    - name: List all services
+      ansible.builtin.command: docker service ls --format "{{ '{{' }}.Name{{ '}}' }}"
+      register: current_services
+      changed_when: false
+      failed_when: false
+
+    - name: Display current services
+      ansible.builtin.debug:
+        msg: "Found services: {{ current_services.stdout_lines }}"
+      when: current_services.stdout_lines | length > 0
+
+    # ========================================
+    # Remove All Stacks
+    # ========================================
+    - name: Remove Jenkins stack
+      ansible.builtin.command: docker stack rm jenkins
+      register: jenkins_removed
+      changed_when: jenkins_removed.rc == 0
+      failed_when: false
+
+    - name: Remove monitoring stack
+      ansible.builtin.command: docker stack rm monitoring
+      register: monitoring_removed
+      changed_when: monitoring_removed.rc == 0
+      failed_when: false
+
+    - name: Remove any other stacks
+      ansible.builtin.command: docker stack rm {{ item }}
+      loop: "{{ current_stacks.stdout_lines }}"
+      when:
+        - current_stacks.stdout_lines | length > 0
+        - item != 'jenkins'
+        - item != 'monitoring'
+      failed_when: false
+      changed_when: true
+
+    - name: Wait for all stacks to be removed
+      ansible.builtin.command: docker stack ls --format "{{ '{{' }}.Name{{ '}}' }}"
+      register: remaining_stacks
+      until: remaining_stacks.stdout_lines | length == 0
+      retries: 60
+      delay: 5
+      changed_when: false
+      failed_when: false
+
+    - name: Display stack removal status
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'All stacks removed' if remaining_stacks.stdout_lines | length == 0 else
+          'Some stacks still present: ' + (remaining_stacks.stdout_lines | join(', ')) }}
+
+    # ========================================
+    # Clean Up Manager Node
+    # ========================================
+    - name: Stop all standalone containers on manager
+      ansible.builtin.shell: |
+        docker ps -q | xargs -r docker stop || true
+      changed_when: false
+      failed_when: false
+
+    - name: Remove all containers on manager
+      ansible.builtin.shell: |
+        docker ps -a -q | xargs -r docker rm -f || true
+      register: containers_removed
+      changed_when: containers_removed.rc == 0
+
+    - name: Remove unused volumes
+      ansible.builtin.command: docker volume prune -f
+      register: volumes_pruned
+      changed_when: "'Total reclaimed space' in volumes_pruned.stdout"
+
+    - name: Remove unused networks
+      ansible.builtin.command: docker network prune -f
+      register: networks_pruned
+      changed_when: "'Total reclaimed space' in networks_pruned.stdout"
+
+    - name: Remove dangling images
+      ansible.builtin.command: docker image prune -f
+      register: images_pruned
+      changed_when: "'Total reclaimed space' in images_pruned.stdout"
+
+    - name: Display manager cleanup summary
+      ansible.builtin.debug:
+        msg:
+          - "Manager Node Cleanup:"
+          - "  Volumes: {{ volumes_pruned.stdout_lines | default(['No changes']) }}"
+          - "  Networks: {{ networks_pruned.stdout_lines | default(['No changes']) }}"
+          - "  Images: {{ images_pruned.stdout_lines | default(['No changes']) }}"
+
+# ========================================
+# Clean Up Worker Nodes
+# ========================================
+- name: Cleanup Worker Nodes
+  hosts: swarm_workers
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop exporter containers on workers
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
+        grep -E 'node-exporter|cadvisor|docker-metrics' | \
+        xargs -r docker stop || true
+      changed_when: false
+      failed_when: false
+
+    - name: Remove exporter containers on workers
+      ansible.builtin.shell: |
+        docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
+        grep -E 'node-exporter|cadvisor|docker-metrics' | \
+        xargs -r docker rm -f || true
+      register: worker_exporters_removed
+      changed_when: worker_exporters_removed.rc == 0
+      failed_when: false
+
+    - name: Stop any remaining containers on workers
+      ansible.builtin.shell: |
+        docker ps -q | xargs -r docker stop || true
+      changed_when: false
+      failed_when: false
+
+    - name: Remove all containers on workers
+      ansible.builtin.shell: |
+        docker ps -a -q | xargs -r docker rm -f || true
+      register: worker_containers_removed
+      changed_when: worker_containers_removed.rc == 0
+      failed_when: false
+
+    - name: Prune volumes on workers
+      ansible.builtin.command: docker volume prune -f
+      register: worker_volumes_pruned
+      changed_when: "'Total reclaimed space' in worker_volumes_pruned.stdout"
+
+    - name: Prune networks on workers
+      ansible.builtin.command: docker network prune -f
+      register: worker_networks_pruned
+      changed_when: "'Total reclaimed space' in worker_networks_pruned.stdout"
+
+    - name: Prune images on workers
+      ansible.builtin.command: docker image prune -f
+      register: worker_images_pruned
+      changed_when: "'Total reclaimed space' in worker_images_pruned.stdout"
+
+    - name: Display worker cleanup summary
+      ansible.builtin.debug:
+        msg: "Worker {{ inventory_hostname }} cleaned up successfully"
+
+# ========================================
+# Final Verification
+# ========================================
+- name: Verify Cleanup and Display Summary
+  hosts: swarm_manager
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Verify no stacks remain
+      ansible.builtin.command: docker stack ls
+      register: final_stacks
+      changed_when: false
+
+    - name: Verify no services remain
+      ansible.builtin.command: docker service ls
+      register: final_services
+      changed_when: false
+
+    - name: Check swarm status
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_status
+      changed_when: false
+
+    - name: Get node list
+      ansible.builtin.command: docker node ls
+      register: node_list
+      changed_when: false
+
+    - name: Display final summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   ✅ Swarm Cleanup Complete"
+          - "========================================="
+          - ""
+          - "Cleanup Results:"
+          - "  Stacks: {{ final_stacks.stdout_lines | length - 1 }} remaining"
+          - "  Services: {{ final_services.stdout_lines | length - 1 }} remaining"
+          - "  Swarm Status: {{ swarm_status.stdout }}"
+          - ""
+          - "Cluster Status:"
+          - "{{ node_list.stdout_lines }}"
+          - ""
+          - "Swarm cluster is still active and ready for new deployments!"
+          - "========================================="

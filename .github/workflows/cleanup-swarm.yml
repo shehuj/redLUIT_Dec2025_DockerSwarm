@@ -1,0 +1,262 @@
+name: Cleanup Swarm Deployments
+
+# WARNING: This workflow removes ALL deployments from the swarm
+# - Manual trigger only for safety
+# - Requires confirmation input
+# - Preserves swarm cluster and Docker
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "CLEANUP" to confirm removal of all deployments'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run mode (check only, no actual removal)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cleanup-swarm-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ANSIBLE_FORCE_COLOR: 'true'
+  ANSIBLE_HOST_KEY_CHECKING: 'false'
+  SWARM_MANAGER_IP: ${{ secrets.SWARM_MANAGER_IP }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  # ----------------------------------------
+  # Validate Confirmation
+  # ----------------------------------------
+  validate-confirmation:
+    name: Validate Cleanup Confirmation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check confirmation input
+        run: |
+          if [ "${{ inputs.confirm }}" != "CLEANUP" ]; then
+            echo "❌ Confirmation failed"
+            echo "You must type 'CLEANUP' exactly to proceed"
+            echo "You entered: '${{ inputs.confirm }}'"
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+
+      - name: Display cleanup plan
+        run: |
+          echo "### ⚠️  Cleanup Plan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**This will remove:**" >> $GITHUB_STEP_SUMMARY
+          echo "- All Docker stacks (jenkins, monitoring, etc.)" >> $GITHUB_STEP_SUMMARY
+          echo "- All services" >> $GITHUB_STEP_SUMMARY
+          echo "- All containers (including exporters)" >> $GITHUB_STEP_SUMMARY
+          echo "- Unused volumes and networks" >> $GITHUB_STEP_SUMMARY
+          echo "- Dangling images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**This will preserve:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Docker Swarm cluster (remains active)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Docker installation" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Node configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dry_run }}" == "true" ]; then
+            echo "**Mode:** 🔍 DRY RUN (no actual changes)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Mode:** ⚡ ACTUAL CLEANUP" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ----------------------------------------
+  # Pre-Cleanup Snapshot
+  # ----------------------------------------
+  pre-cleanup-snapshot:
+    name: Take Pre-Cleanup Snapshot
+    runs-on: ubuntu-latest
+    needs: validate-confirmation
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Capture current state
+        run: |
+          echo "### 📸 Pre-Cleanup State" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Stacks:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} "docker stack ls" >> $GITHUB_STEP_SUMMARY || echo "None" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Services:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} "docker service ls" >> $GITHUB_STEP_SUMMARY || echo "None" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ----------------------------------------
+  # Run Cleanup
+  # ----------------------------------------
+  cleanup-deployments:
+    name: Cleanup Swarm Deployments
+    runs-on: ubuntu-latest
+    needs: [validate-confirmation, pre-cleanup-snapshot]
+
+    steps:
+      - name: Verify required secrets
+        run: |
+          if [ -z "$SWARM_MANAGER_IP" ]; then
+            echo "❌ Missing SWARM_MANAGER_IP secret"
+            exit 1
+          fi
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "❌ Missing SSH_PRIVATE_KEY secret"
+            exit 1
+          fi
+          echo "✅ Required secrets configured"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Install Ansible & Dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install ansible
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Run cleanup playbook (Dry Run)
+        if: inputs.dry_run == true
+        run: |
+          echo "🔍 Running in DRY RUN mode (no actual changes)..."
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            --check \
+            --diff \
+            ansible/playbooks/cleanup-swarm.yml
+          echo "✅ Dry run complete - no changes made"
+
+      - name: Run cleanup playbook (Actual)
+        if: inputs.dry_run != true
+        run: |
+          echo "⚡ Running ACTUAL cleanup..."
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            ansible/playbooks/cleanup-swarm.yml
+
+  # ----------------------------------------
+  # Post-Cleanup Verification
+  # ----------------------------------------
+  verify-cleanup:
+    name: Verify Cleanup Results
+    runs-on: ubuntu-latest
+    needs: cleanup-deployments
+    if: always() && needs.cleanup-deployments.result == 'success'
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SWARM_MANAGER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Verify no stacks remain
+        run: |
+          STACKS=$(ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker stack ls --format '{{.Name}}'" | wc -l)
+          if [ "$STACKS" -eq 0 ]; then
+            echo "✅ No stacks remaining"
+          else
+            echo "⚠️  Warning: $STACKS stacks still present"
+          fi
+
+      - name: Verify no services remain
+        run: |
+          SERVICES=$(ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker service ls --format '{{.Name}}'" | wc -l)
+          if [ "$SERVICES" -eq 0 ]; then
+            echo "✅ No services remaining"
+          else
+            echo "⚠️  Warning: $SERVICES services still present"
+          fi
+
+      - name: Verify swarm is still active
+        run: |
+          SWARM_STATE=$(ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker info --format '{{.Swarm.LocalNodeState}}'")
+          if [ "$SWARM_STATE" == "active" ]; then
+            echo "✅ Swarm is still active"
+          else
+            echo "❌ Swarm is not active: $SWARM_STATE"
+            exit 1
+          fi
+
+      - name: Get final cluster state
+        run: |
+          echo "### ✅ Post-Cleanup State" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Stacks:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker stack ls" >> $GITHUB_STEP_SUMMARY || echo "None" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Services:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker service ls" >> $GITHUB_STEP_SUMMARY || echo "None" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Nodes:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker node ls" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ----------------------------------------
+  # Display Summary
+  # ----------------------------------------
+  cleanup-summary:
+    name: Display Cleanup Summary
+    runs-on: ubuntu-latest
+    needs: [cleanup-deployments, verify-cleanup]
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "### 🧹 Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Cleanup: ${{ needs.cleanup-deployments.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Verification: ${{ needs.verify-cleanup.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.cleanup-deployments.result }}" == "success" ]; then
+            echo "✅ **Cleanup completed successfully**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Your swarm cluster is now clean and ready for new deployments!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**To redeploy:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Run 'Deploy Exporters' workflow" >> $GITHUB_STEP_SUMMARY
+            echo "2. Run 'Monitoring Stack Deployment' workflow" >> $GITHUB_STEP_SUMMARY
+            echo "3. Run 'Jenkins CI/CD Stack Deployment' workflow" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Cleanup failed**" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for details" >> $GITHUB_STEP_SUMMARY
+          fi
