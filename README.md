@@ -15,9 +15,11 @@ Production-ready Docker Swarm cluster deployment using Ansible automation with c
 - [Configuration](#configuration)
 - [Deployment](#deployment)
 - [Monitoring](#monitoring)
+- [Production Operations](#-production-operations)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Security](#security)
+- [Production Standards](#-production-standards)
 - [Contributing](#contributing)
 
 ---
@@ -43,6 +45,9 @@ This project automates the deployment and management of a Docker Swarm cluster u
 - ✅ Support for AWS EC2 dynamic inventory
 - ✅ Static inventory for on-premise deployments
 - ✅ Idempotent playbooks with proper error handling
+- ✅ Automated backup and restore procedures
+- ✅ Health check monitoring and validation
+- ✅ Rollback capabilities for failed deployments
 
 ### Application Stack
 - ✅ Multi-service application deployment
@@ -60,13 +65,16 @@ This project automates the deployment and management of a Docker Swarm cluster u
 - ✅ Automated alerting capabilities
 
 ### CI/CD Pipeline
+- ✅ Branch-based deployment strategy (dev → main)
 - ✅ Automated validation and linting
 - ✅ Security scanning (Trivy, Gitleaks)
 - ✅ Ansible playbook testing
 - ✅ Docker stack validation
-- ✅ Automated deployment on merge
+- ✅ Dry-run testing on dev branch
+- ✅ Production deployment on main branch
+- ✅ Manual Jenkins deployment workflow
 - ✅ Post-deployment verification
-- ✅ PR commenting with test results
+- ✅ Pinned dependency versions
 
 ### Security
 - ✅ Secret scanning
@@ -288,21 +296,31 @@ Modify `docker-stack.yml` to customize:
 
 ### Automated CI/CD Deployment
 
-The GitHub Actions workflow (`ansible-deploy.yml`) automatically:
+The GitHub Actions workflows follow a branch-based deployment strategy:
 
-1. **On Pull Requests**:
+1. **Dev Branch** (Push to dev):
    - Validates Ansible syntax
-   - Runs ansible-lint
-   - Scans for security issues
-   - Validates Docker stack file
-   - Comments results on PR
+   - Runs ansible-lint and yamllint
+   - Scans for security issues (Trivy, Gitleaks)
+   - Validates Docker stack files
+   - **Dry-run mode**: Tests without actual deployment
+   - All tests run in check mode
 
-2. **On Merge to Main**:
+2. **Main Branch** (Merge to main):
    - Runs all validation checks
-   - Deploys to production cluster
+   - **Production deployment**: Actual infrastructure changes
+   - Deploys Swarm cluster
+   - Deploys monitoring stack
    - Runs post-deployment tests
    - Verifies service health
-   - Generates deployment report
+   - Health check validation
+
+3. **Jenkins Deployment** (Manual Only):
+   - Navigate to: Actions → Jenkins CI/CD Stack Deployment
+   - Click "Run workflow"
+   - Requires manual trigger via `workflow_dispatch`
+   - Includes pre-deployment validation
+   - Post-deployment health checks
 
 ### Manual Deployment
 
@@ -378,6 +396,152 @@ Visual representation of:
 - Service placement
 - Container status
 - Real-time updates
+
+---
+
+## 🔧 Production Operations
+
+### Backup Procedures
+
+Automated backup of critical data runs daily at 2 AM UTC.
+
+**Manual Backup**:
+```bash
+# Backup all critical data
+ansible-playbook ansible/playbooks/backup.yml -i ansible/inventory.yml
+
+# Backups include:
+# - Swarm node configurations
+# - Stack definitions
+# - Prometheus data
+# - Grafana data
+# - Jenkins data
+# - Monitoring configs
+
+# Backup locations:
+# /var/backups/swarm/TIMESTAMP/
+# /var/backups/monitoring/TIMESTAMP/
+# /var/backups/jenkins/TIMESTAMP/
+```
+
+**Backup Retention**: 30 days (configurable in playbook)
+
+### Restore Procedures
+
+Restore from backup in case of disaster or data corruption.
+
+```bash
+# Run restore playbook
+ansible-playbook ansible/playbooks/restore.yml -i ansible/inventory.yml
+
+# You will be prompted for:
+# 1. Backup timestamp (format: YYYYMMDDTHHMMSS)
+# 2. Confirmation (type "RESTORE")
+
+# Example:
+# Enter backup timestamp: 20251220T020000
+# Type 'RESTORE' to confirm: RESTORE
+```
+
+**What gets restored**:
+- Prometheus metrics data
+- Grafana dashboards and configurations
+- Jenkins jobs and build history
+- Monitoring stack configurations
+
+**Post-restore validation**:
+- Prometheus health check
+- Grafana accessibility
+- Jenkins service status
+- All services verification
+
+### Health Checks
+
+Comprehensive health monitoring for the entire infrastructure.
+
+```bash
+# Run full health check
+ansible-playbook ansible/playbooks/health-check.yml -i ansible/inventory.yml
+
+# Checks performed:
+# ✓ Docker Swarm cluster status
+# ✓ All nodes availability
+# ✓ Service replicas status
+# ✓ Disk usage warnings
+# ✓ Memory usage warnings
+# ✓ Node exporters health
+# ✓ cAdvisor health
+# ✓ Prometheus targets
+# ✓ Grafana availability
+# ✓ Jenkins status (if deployed)
+```
+
+**Schedule**: Run every 15 minutes in production (configure via cron or GitHub Actions)
+
+**Health Check Components**:
+- **Swarm Cluster**: Node status, availability, services
+- **Worker Nodes**: Disk space (warn >80%), memory (warn >90%)
+- **Exporters**: node-exporter and cAdvisor on all nodes
+- **Monitoring**: Prometheus/Grafana health and data usage
+- **Jenkins**: Service health endpoint validation
+
+### Rollback Procedures
+
+Revert deployments when issues are detected.
+
+```bash
+# Run rollback playbook
+ansible-playbook ansible/playbooks/rollback.yml -i ansible/inventory.yml
+
+# You will be prompted for:
+# 1. Component to rollback: stack/monitoring/jenkins/all
+# 2. Confirmation (type "ROLLBACK")
+
+# Example:
+# Which component to rollback? stack
+# Type 'ROLLBACK' to confirm: ROLLBACK
+```
+
+**Rollback Process**:
+1. Pre-rollback snapshot captured
+2. Docker service rollback executed
+3. Services stabilize (30-60 seconds)
+4. Post-rollback validation
+5. Report generated in `/var/log/rollback_TIMESTAMP.log`
+
+**Supported Rollback Targets**:
+- `stack`: All application stack services
+- `monitoring`: Prometheus and Grafana stack
+- `jenkins`: Jenkins CI/CD service
+- `all`: Complete infrastructure rollback
+
+### Cleanup Operations
+
+Remove deployments while preserving cluster infrastructure.
+
+```bash
+# Cleanup via GitHub Actions
+# Navigate to Actions → Cleanup Swarm Deployment
+# Click "Run workflow"
+# Enter "CLEANUP" to confirm
+
+# Or run manually:
+ansible-playbook ansible/playbooks/cleanup-swarm.yml -i ansible/inventory.yml
+```
+
+**Cleanup includes**:
+- Docker stacks removal
+- Container cleanup
+- Volume pruning
+- Network cleanup
+- Image pruning
+- Monitoring stack shutdown
+
+**Cleanup preserves**:
+- Swarm cluster structure
+- Docker installation
+- Node configurations
+- SSH access
 
 ---
 
@@ -635,7 +799,7 @@ Modify `ansible/playbooks/install-docker.yml` daemon.json:
 ### Pipeline Stages
 
 ```
-Pull Request Flow:
+Dev Branch Flow (Dry-Run Testing):
 ┌─────────────┐
 │  Validate   │ ── Syntax, lint, YAML validation
 └──────┬──────┘
@@ -645,24 +809,41 @@ Pull Request Flow:
 └──────┬──────┘
        │
 ┌──────▼──────┐
-│    Test     │ ── Ansible check mode, stack validation
+│  Dry-Run    │ ── Ansible check mode (no changes)
 └──────┬──────┘
        │
 ┌──────▼──────┐
-│ PR Comment  │ ── Post results to PR
+│   Report    │ ── Test results and validation
 └─────────────┘
 
-Main Branch Flow:
+Main Branch Flow (Production Deployment):
 ┌─────────────┐
-│  Validate   │
+│  Validate   │ ── All validation checks
 └──────┬──────┘
        │
 ┌──────▼──────┐
-│   Deploy    │ ── Full deployment to production
+│Deploy Swarm │ ── Swarm cluster setup
 └──────┬──────┘
        │
 ┌──────▼──────┐
-│   Verify    │ ── Health checks, smoke tests
+│Deploy Stack │ ── Monitoring & services
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Verify    │ ── Health checks, validation
+└─────────────┘
+
+Manual Jenkins Flow:
+┌─────────────┐
+│  Validate   │ ── Pre-deployment checks
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Deploy    │ ── Jenkins stack deployment
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Verify    │ ── Jenkins health validation
 └─────────────┘
 ```
 
@@ -670,12 +851,14 @@ Main Branch Flow:
 
 | Job | Duration | Triggers | Purpose |
 |-----|----------|----------|---------|
-| **Validate** | ~2min | All PRs/pushes | Syntax and lint checks |
-| **Security** | ~3min | All PRs/pushes | Security scanning |
-| **Test** | ~2min | All PRs/pushes | Dry-run testing |
-| **Build** | ~1min | PRs only | Validation and PR comment |
-| **Deploy** | ~10min | Main branch only | Production deployment |
-| **Verify** | ~1min | After deploy | Health verification |
+| **CI Validation** | ~3min | Push to dev/main | Syntax, lint, security scans |
+| **Swarm Setup (Dry)** | ~5min | Push to dev | Test swarm deployment |
+| **Swarm Setup (Prod)** | ~10min | Push to main | Deploy swarm cluster |
+| **Monitoring (Dry)** | ~3min | Push to dev | Test monitoring stack |
+| **Monitoring (Prod)** | ~8min | Push to main | Deploy monitoring |
+| **Jenkins Deploy** | ~5min | Manual trigger | Deploy Jenkins (manual only) |
+| **Cleanup** | ~3min | Manual trigger | Remove deployments |
+| **Health Checks** | ~2min | After deployment | Validate all services |
 
 ---
 
@@ -687,7 +870,11 @@ Main Branch Flow:
 redLUIT_Dec2025_DockerSwarm/
 ├── .github/
 │   └── workflows/
-│       └── ansible-deploy.yml       # CI/CD pipeline
+│       ├── ci-validation.yml        # Validation pipeline (dev/main)
+│       ├── swarm-setup.yml          # Swarm deployment (dev/main)
+│       ├── monitoring-deploy.yml    # Monitoring deployment (dev/main)
+│       ├── jenkins-deploy.yml       # Jenkins deployment (manual)
+│       └── cleanup-swarm.yml        # Cleanup workflow (manual)
 ├── ansible/
 │   ├── ansible.cfg                  # Ansible configuration
 │   ├── requirements.yml             # Galaxy collections
@@ -697,11 +884,26 @@ redLUIT_Dec2025_DockerSwarm/
 │       ├── install-docker.yml       # Docker installation
 │       ├── swarm-setup.yml          # Swarm initialization
 │       ├── deploy-stack.yml         # Stack deployment
-│       └── test-swarm.yml           # Test suite
+│       ├── setup-monitoring.yml     # Monitoring stack setup
+│       ├── setup-jenkins.yml        # Jenkins deployment
+│       ├── setup-exporters.yml      # Metrics exporters
+│       ├── test-swarm.yml           # Swarm tests
+│       ├── test-exporters.yml       # Exporter tests
+│       ├── backup.yml               # Backup playbook
+│       ├── restore.yml              # Restore playbook
+│       ├── health-check.yml         # Health monitoring
+│       ├── rollback.yml             # Rollback procedures
+│       ├── cleanup-swarm.yml        # Cleanup deployments
+│       └── debug-*.yml              # Debug playbooks
 ├── configs/
 │   ├── nginx.conf                   # Nginx configuration
-│   └── prometheus.yml               # Prometheus config
-├── docker-stack.yml                 # Docker Compose stack
+│   ├── prometheus.yml.j2            # Prometheus template (dynamic)
+│   └── grafana/                     # Grafana configs
+├── docker-stack.yml                 # Application stack
+├── jenkins-stack.yml                # Jenkins stack
+├── requirements.txt                 # Python dependencies (pinned)
+├── PRODUCTION_STANDARDS.md          # Production best practices
+├── CHANGELOG.md                     # Version history
 ├── .ansible-lint                    # Ansible linting rules
 ├── .yamllint                        # YAML linting rules
 └── README.md                        # This file
@@ -798,6 +1000,61 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
+## 📋 Production Standards
+
+This project follows comprehensive production best practices documented in `PRODUCTION_STANDARDS.md`.
+
+### Key Standards
+
+**Version Management**:
+- All Python dependencies pinned in `requirements.txt`
+- Docker images use specific version tags (no `latest`)
+- Semantic versioning tracked in `CHANGELOG.md`
+- Git tags for release versions
+
+**Backup & Disaster Recovery**:
+- Automated daily backups (2 AM UTC)
+- 30-day backup retention policy
+- Tested restore procedures
+- Backup verification in health checks
+
+**Operational Excellence**:
+- Health checks every 15 minutes
+- Rollback procedures for all components
+- Pre-deployment validation
+- Post-deployment verification
+- Comprehensive logging
+
+**CI/CD Standards**:
+- Dev branch for testing (dry-run)
+- Main branch for production
+- Manual approval for Jenkins
+- Security scanning on all changes
+- Automated health checks post-deployment
+
+**Documentation**:
+- Production standards guide
+- Comprehensive README
+- Inline playbook documentation
+- Version history (CHANGELOG)
+- Troubleshooting guides
+
+### Compliance Status
+
+Current implementation: **Phase 1 (Critical) - Complete**
+
+✅ Version pinning for all dependencies
+✅ Backup and restore procedures
+✅ Health monitoring playbook
+✅ Rollback capabilities
+✅ Production documentation
+✅ CI/CD branch strategy
+✅ Security scanning
+
+See `PRODUCTION_STANDARDS.md` for Phase 2-4 implementation roadmap.
+
+---
+
 ## 🙏 Acknowledgments
 
 - Docker Swarm community
@@ -815,6 +1072,14 @@ For issues and questions:
 
 ---
 
-**Last Updated**: December 2024
+**Last Updated**: December 2025
 **Version**: 1.0.0
 **Status**: Production Ready ✅
+
+---
+
+## 🔗 Quick Links
+
+- **[Production Standards](PRODUCTION_STANDARDS.md)** - Best practices and compliance
+- **[CHANGELOG](CHANGELOG.md)** - Version history and updates
+- **[Requirements](requirements.txt)** - Python dependencies
