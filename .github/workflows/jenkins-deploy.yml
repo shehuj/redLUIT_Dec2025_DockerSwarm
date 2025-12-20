@@ -63,8 +63,19 @@ jobs:
             --private-key ~/.ssh/id_rsa \
             ansible/playbooks/setup-jenkins.yml
 
+      - name: start Jenkins service
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker service update --force jenkins_jenkins" 
+
+
+      - name: Enable Jenkins Service Auto-restart
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
+            "docker service update --restart-condition any jenkins_jenkins"
+
       - name: Wait for Jenkins to start
-        run: sleep 45
+        run: sleep 10
 
   # ----------------------------------------
   # Validate Jenkins Deployment
