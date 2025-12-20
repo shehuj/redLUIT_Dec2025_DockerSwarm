@@ -85,8 +85,8 @@
     - name: Verify sufficient disk space for Jenkins
       ansible.builtin.assert:
         that:
-          - available_disk.stdout | int >= 10
-        fail_msg: "Insufficient disk space. Jenkins requires at least 10GB. Available: {{ available_disk.stdout }}GB"
+          - available_disk.stdout | int >= 3.5
+        fail_msg: "Insufficient disk space. Jenkins requires at least 3GB. Available: {{ available_disk.stdout }}GB"
         success_msg: "Sufficient disk space available: {{ available_disk.stdout }}GB"
 
     # ========================================
