@@ -70,20 +70,17 @@
         fail_msg: "❌ Insufficient memory. Jenkins requires >= {{ min_memory_mb }}MB. Available: {{ available_memory_mb }}MB"
         success_msg: "✔ Sufficient memory available: {{ available_memory_mb }}MB"
 
-    - name: Set free disk bytes for Docker root
-      ansible.builtin.set_fact:
-        free_disk_bytes: "{{ ansible_mounts | selectattr('mount','equalto','/var/lib/docker') | map(attribute='size_available') | first | default(0) }}"
+    - name: Check available disk space on Docker data directory
+      ansible.builtin.shell: df -BG /var/lib/docker | tail -1 | awk '{print $4}' | sed 's/G//'
+      register: docker_disk_space
+      changed_when: false
 
-    - name: Convert free disk bytes to GiB
-      ansible.builtin.set_fact:
-        free_disk_gib: "{{ (free_disk_bytes | float) / (1024**3) }}"
-
-    - name: Assert free disk space
+    - name: Verify sufficient disk space for Jenkins
       ansible.builtin.assert:
         that:
-          - free_disk_gib >= min_disk_gib
-        fail_msg: "❌ Insufficient disk space ({{ free_disk_gib | round(2) }}GiB). Need >= {{ min_disk_gib }}GiB"
-        success_msg: "✔ Sufficient disk space: {{ free_disk_gib | round(2) }}GiB free"
+          - docker_disk_space.stdout | float >= min_disk_gib
+        fail_msg: "❌ Insufficient disk space. Jenkins requires at least {{ min_disk_gib }}GB. Available: {{ docker_disk_space.stdout }}GB"
+        success_msg: "✔ Sufficient disk space available: {{ docker_disk_space.stdout }}GB"
 
     # ========================================
     # Prepare Deployment Files
