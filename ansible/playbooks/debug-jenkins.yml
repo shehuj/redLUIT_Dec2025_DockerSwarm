@@ -1,0 +1,129 @@
+---
+- name: Debug and Troubleshoot Jenkins Deployment
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check if Docker is running
+      ansible.builtin.command: docker info
+      register: docker_info
+      failed_when: false
+      changed_when: false
+
+    - name: Display Docker status
+      ansible.builtin.debug:
+        msg: "{{ 'Docker is running' if docker_info.rc == 0 else 'Docker is NOT running' }}"
+
+    - name: Check Docker Swarm status
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display Swarm status
+      ansible.builtin.debug:
+        msg: "Swarm status: {{ swarm_status.stdout }}"
+
+    - name: List all Docker stacks
+      ansible.builtin.command: docker stack ls
+      register: stacks
+      changed_when: false
+      failed_when: false
+
+    - name: Display all stacks
+      ansible.builtin.debug:
+        msg: "{{ stacks.stdout_lines }}"
+
+    - name: Check for Jenkins stack
+      ansible.builtin.command: docker stack services jenkins
+      register: jenkins_stack
+      changed_when: false
+      failed_when: false
+
+    - name: Display Jenkins stack services
+      ansible.builtin.debug:
+        msg: "{{ jenkins_stack.stdout_lines if jenkins_stack.rc == 0 else 'Jenkins stack not found' }}"
+
+    - name: List all services
+      ansible.builtin.command: docker service ls
+      register: all_services
+      changed_when: false
+
+    - name: Display all services
+      ansible.builtin.debug:
+        msg: "{{ all_services.stdout_lines }}"
+
+    - name: Check for Jenkins-related containers
+      ansible.builtin.command: docker ps -a --filter "name=jenkins"
+      register: jenkins_containers
+      changed_when: false
+
+    - name: Display Jenkins containers
+      ansible.builtin.debug:
+        msg: "{{ jenkins_containers.stdout_lines }}"
+
+    - name: Get Jenkins service logs (if exists)
+      ansible.builtin.command: docker service logs --tail 50 jenkins_jenkins
+      register: jenkins_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Display Jenkins logs
+      ansible.builtin.debug:
+        msg: "{{ jenkins_logs.stdout_lines if jenkins_logs.rc == 0 else 'No Jenkins service logs available' }}"
+
+    - name: Check if Jenkins service exists but is failing
+      ansible.builtin.command: docker service ps jenkins_jenkins --no-trunc
+      register: jenkins_tasks
+      changed_when: false
+      failed_when: false
+
+    - name: Display Jenkins task status
+      ansible.builtin.debug:
+        msg: "{{ jenkins_tasks.stdout_lines if jenkins_tasks.rc == 0 else 'No Jenkins tasks found' }}"
+
+    - name: Check for port conflicts on 8081
+      ansible.builtin.shell: netstat -tuln | grep 8081 || echo "Port 8081 is free"
+      register: port_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display port status
+      ansible.builtin.debug:
+        msg: "{{ port_check.stdout_lines }}"
+
+    - name: Check Jenkins deployment directory
+      ansible.builtin.stat:
+        path: /opt/jenkins/docker-compose.yml
+      register: jenkins_compose
+
+    - name: Display Jenkins compose file status
+      ansible.builtin.debug:
+        msg: "{{ 'Jenkins compose file exists' if jenkins_compose.stat.exists else 'Jenkins compose file NOT found' }}"
+
+    - name: Check Jenkins data directory
+      ansible.builtin.stat:
+        path: /var/jenkins_home
+      register: jenkins_data
+
+    - name: Display Jenkins data directory status
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Jenkins data directory exists' if jenkins_data.stat.exists else 'Jenkins data directory NOT found' }}
+
+    - name: Summary of findings
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Jenkins Diagnostic Summary"
+          - "========================================="
+          - "Docker: {{ 'Running' if docker_info.rc == 0 else 'NOT Running' }}"
+          - "Swarm: {{ swarm_status.stdout }}"
+          - "Jenkins Stack: {{ 'Found' if jenkins_stack.rc == 0 else 'NOT Found' }}"
+          - "Jenkins Compose: {{ 'Exists' if jenkins_compose.stat.exists else 'Missing' }}"
+          - "Jenkins Data Dir: {{ 'Exists' if jenkins_data.stat.exists else 'Missing' }}"
+          - "Port 8081: {{ 'In Use' if '8081' in port_check.stdout else 'Available' }}"
+          - "========================================="
+          - ""
+          - "Next steps based on findings above"

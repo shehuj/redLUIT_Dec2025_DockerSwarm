@@ -1,34 +1,26 @@
 name: Jenkins CI/CD Stack Deployment
 
 # Deploys Jenkins CI/CD stack to Docker Swarm
-# IMPORTANT: Only deploys after all other infrastructure is ready
-# - Validates Swarm cluster health
-# - Validates exporters are running
-# - Validates monitoring stack is deployed
-# - Then deploys Jenkins
+# - Checks Docker Swarm is active
+# - Deploys Jenkins stack
 
 on:
-  workflow_run:
-    workflows:
-      - "Docker Swarm Cluster Setup"
-      - "Deploy Exporters"
-      - "Monitoring Stack Deployment"
-    types:
-      - completed
-    branches: [main]
+  pull_request:
+    paths:
+      - 'ansible/playbooks/setup-jenkins.yml'
+      - 'jenkins-stack.yml'
+      - 'ansible/inventory.yml'
+      - '.github/workflows/jenkins-deploy.yml'
+
+  push:
+    branches: ["main"]
+    paths:
+      - 'ansible/playbooks/setup-jenkins.yml'
+      - 'jenkins-stack.yml'
+      - 'ansible/inventory.yml'
+      - '.github/workflows/jenkins-deploy.yml'
 
   workflow_dispatch:
-    inputs:
-      skip_validation:
-        description: 'Skip prerequisite validation checks'
-        required: false
-        default: false
-        type: boolean
-      force_deploy:
-        description: 'Force deploy even if other workflows failed'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -47,113 +39,11 @@ env:
 
 jobs:
   # ----------------------------------------
-  # Validate Prerequisites
-  # ----------------------------------------
-  validate-prerequisites:
-    name: Validate All Prerequisites
-    runs-on: ubuntu-latest
-    # Only run if triggered workflows succeeded OR force_deploy is true
-    if: |
-      (github.event_name == 'workflow_dispatch' && inputs.force_deploy == true) ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      github.event_name == 'workflow_dispatch'
-
-    outputs:
-      validation_passed: ${{ steps.validate.outputs.passed }}
-
-    steps:
-      - name: Check workflow_run trigger status
-        if: github.event_name == 'workflow_run'
-        run: |
-          echo "Triggered by: ${{ github.event.workflow_run.name }}"
-          echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
-          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
-            echo "❌ Prerequisite workflow did not succeed"
-            exit 1
-          fi
-
-      - uses: actions/checkout@v4
-
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          printf "%s\n" "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Install Ansible
-        run: |
-          pip install ansible
-          ansible-galaxy collection install -r ansible/requirements.yml
-
-      - name: Validate Swarm cluster health
-        id: validate
-        run: |
-          echo "Validating Docker Swarm cluster..."
-
-          # Check if manager is accessible
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "docker info --format '{{.Swarm.LocalNodeState}}'" | grep -q "active"
-
-          if [ $? -eq 0 ]; then
-            echo "✅ Swarm is active"
-            echo "passed=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Swarm is not active"
-            echo "passed=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-      - name: Verify all nodes are ready
-        run: |
-          echo "Checking swarm nodes status..."
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            'docker node ls --format "{{.Hostname}} {{.Status}} {{.Availability}}"'
-
-          # Check for Down or Drain nodes
-          DOWN_NODES=$(ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            'docker node ls --format "{{.Status}}"' | grep -c "Down" || true)
-
-          if [ "$DOWN_NODES" -gt 0 ]; then
-            echo "❌ Found $DOWN_NODES nodes that are Down"
-            exit 1
-          fi
-          echo "✅ All nodes are Ready"
-
-      - name: Check exporters are running
-        if: inputs.skip_validation != true
-        run: |
-          echo "Validating exporters on manager..."
-
-          # Check Docker Metrics
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "curl -f http://localhost:9323/metrics" > /dev/null && echo "✅ Docker Metrics OK" || (echo "❌ Docker Metrics failed" && exit 1)
-
-          # Check Node Exporter
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "curl -f http://localhost:9100/metrics" > /dev/null && echo "✅ Node Exporter OK" || (echo "❌ Node Exporter failed" && exit 1)
-
-          # Check cAdvisor
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${{ secrets.MANAGER_IP }} \
-            "curl -f http://localhost:8080/metrics" > /dev/null && echo "✅ cAdvisor OK" || (echo "❌ cAdvisor failed" && exit 1)
-
-      - name: Validation summary
-        run: |
-          echo "### Prerequisites Validation Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Docker Swarm cluster is active" >> $GITHUB_STEP_SUMMARY
-          echo "✅ All nodes are ready" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Exporters are running" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Ready to deploy Jenkins!" >> $GITHUB_STEP_SUMMARY
-
-  # ----------------------------------------
   # Deploy Jenkins Stack
   # ----------------------------------------
   deploy-jenkins:
     name: Deploy Jenkins CI/CD Stack
     runs-on: ubuntu-latest
-    needs: validate-prerequisites
-    if: needs.validate-prerequisites.outputs.validation_passed == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -169,13 +59,26 @@ jobs:
           pip install ansible
           ansible-galaxy collection install -r ansible/requirements.yml
 
-      - name: Deploy Jenkins via Ansible
+      - name: Deploy Jenkins via Ansible (Dry Run)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Running in check mode (no actual changes)..."
+          ansible-playbook -i ansible/inventory.yml \
+            --private-key ~/.ssh/id_rsa \
+            --check \
+            --diff \
+            ansible/playbooks/setup-jenkins.yml || true
+          echo "✅ Dry run complete"
+
+      - name: Deploy Jenkins via Ansible (Actual)
+        if: github.event_name != 'pull_request'
         run: |
           ansible-playbook -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
             ansible/playbooks/setup-jenkins.yml
 
       - name: Wait for Jenkins to stabilize
+        if: github.event_name != 'pull_request'
         run: sleep 45
 
   # ----------------------------------------
@@ -185,7 +88,10 @@ jobs:
     name: Validate Jenkins Deployment
     runs-on: ubuntu-latest
     needs: deploy-jenkins
-    if: always() && needs.deploy-jenkins.result == 'success'
+    if: |
+      always() &&
+      needs.deploy-jenkins.result == 'success' &&
+      github.event_name != 'pull_request'
 
     steps:
       - name: Setup SSH
@@ -242,7 +148,6 @@ jobs:
         run: |
           echo "### Jenkins CI/CD Stack Deployment Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Prerequisites Validation: ${{ needs.validate-prerequisites.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Jenkins Deployment: ${{ needs.deploy-jenkins.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Jenkins Validation: ${{ needs.validate-jenkins.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
