@@ -54,14 +54,42 @@
       when: port_9100_all_containers.stdout_lines | length > 0
       failed_when: false
 
-    - name: Remove containers by name (cadvisor, node-exporter)
+    - name: Stop existing node-exporter container
+      ansible.builtin.shell: docker stop node-exporter || true
+      failed_when: false
+      changed_when: false
+
+    - name: Remove existing node-exporter container
+      ansible.builtin.shell: docker rm -f node-exporter || true
+      register: remove_node_exporter
+      changed_when: remove_node_exporter.rc == 0
+      failed_when: false
+
+    - name: Stop existing cadvisor container
+      ansible.builtin.shell: docker stop cadvisor || true
+      failed_when: false
+      changed_when: false
+
+    - name: Remove existing cadvisor container
+      ansible.builtin.shell: docker rm -f cadvisor || true
+      register: remove_cadvisor
+      changed_when: remove_cadvisor.rc == 0
+      failed_when: false
+
+    - name: Remove any containers by name pattern
       ansible.builtin.shell: |
-        docker ps -a --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }}" | \
+        docker ps -a --format "{{ '{{' }}.Names{{ '}}' }}" | \
         grep -iE 'cadvisor|node-exporter|mystack' | \
-        awk '{print $1}' | \
         xargs -r docker rm -f || true
       register: cleanup_by_name
       changed_when: cleanup_by_name.stdout != ""
+      failed_when: false
+
+    - name: Prune stopped containers
+      ansible.builtin.command: docker container prune -f
+      register: container_prune
+      changed_when: "'deleted' in container_prune.stdout"
+      failed_when: false
 
     - name: Kill any process on port 8080 (non-Docker)
       ansible.builtin.shell: |
@@ -77,7 +105,7 @@
 
     - name: Wait for ports to be fully released
       ansible.builtin.pause:
-        seconds: 5
+        seconds: 10
 
     - name: Start Node Exporter container
       ansible.builtin.command: >
