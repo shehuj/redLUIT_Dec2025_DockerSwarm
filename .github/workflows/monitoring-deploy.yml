@@ -1,21 +1,13 @@
 name: Monitoring Stack Deployment
 
-# Deploys Prometheus and Grafana monitoring stack
-# - Dry run on PR (check mode)
-# - Actual deployment on merge to main
+# CI/CD Flow:
+# - Push to dev: Dry run (validation only)
+# - Merge to main: Actual deployment
+# - Manual: workflow_dispatch
 
 on:
-  pull_request:
-    paths:
-      - 'ansible/playbooks/setup-monitoring.yml'
-      - 'monitoring-stack.yml'
-      - 'configs/prometheus-monitoring.yml'
-      - 'configs/grafana-datasources.yml'
-      - 'ansible/inventory.yml'
-      - '.github/workflows/monitoring-deploy.yml'
-
   push:
-    branches: ["main"]
+    branches: ["dev", "main"]
     paths:
       - 'ansible/playbooks/setup-monitoring.yml'
       - 'monitoring-stack.yml'
@@ -87,7 +79,7 @@ jobs:
           ansible-galaxy collection install -r ansible/requirements.yml
 
       - name: Deploy monitoring stack via Ansible (Dry Run)
-        if: github.event_name == 'pull_request'
+        if: github.ref == 'refs/heads/dev'
         run: |
           echo "🔍 Running in check mode (no actual changes)..."
           ansible-playbook -i ansible/inventory.yml \
@@ -98,14 +90,14 @@ jobs:
           echo "✅ Dry run complete"
 
       - name: Deploy monitoring stack via Ansible (Actual)
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main'
         run: |
           ansible-playbook -i ansible/inventory.yml \
             --private-key ~/.ssh/id_rsa \
             ansible/playbooks/setup-monitoring.yml
 
       - name: Wait for services to start
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main'
         run: sleep 30
 
   # ----------------------------------------
@@ -118,7 +110,7 @@ jobs:
     if: |
       always() &&
       needs.deploy-monitoring.result == 'success' &&
-      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
       (github.event_name != 'workflow_dispatch' || inputs.skip_validation == false)
 
     steps:
@@ -160,7 +152,7 @@ jobs:
     if: |
       always() &&
       needs.validate-monitoring.result == 'success' &&
-      github.event_name != 'pull_request'
+      github.ref == 'refs/heads/main'
 
     steps:
       - name: Setup SSH

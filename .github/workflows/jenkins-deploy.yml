@@ -1,15 +1,7 @@
 name: Jenkins CI/CD Stack Deployment
 
-# Deploys the Jenkins CI/CD stack to Docker Swarm ONLY on merge to main
+# Manual deployment only - trigger via workflow_dispatch
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - 'ansible/playbooks/setup-jenkins.yml'
-      - 'jenkins-stack.yml'
-      - 'ansible/inventory.yml'
-      - '.github/workflows/jenkins-deploy.yml'
-
   workflow_dispatch:
 
 permissions:
