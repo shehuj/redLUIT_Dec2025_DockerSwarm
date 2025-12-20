@@ -15,9 +15,10 @@
     min_disk_gib: 3.0
 
   tasks:
-    # ----------------------------------------
+
+    # ========================================
     # Basic Swarm Validation
-    # ----------------------------------------
+    # ========================================
     - name: Verify Docker Swarm is active
       ansible.builtin.command: docker info --format '{{ "{{" }}.Swarm.LocalNodeState{{ "}}" }}'
       register: swarm_state
@@ -28,9 +29,9 @@
       ansible.builtin.debug:
         msg: "✔ Docker Swarm is active!"
 
-    # ----------------------------------------
+    # ========================================
     # Clean Up Existing Jenkins Services
-    # ----------------------------------------
+    # ========================================
     - name: Find existing Jenkins services
       ansible.builtin.command: docker service ls --filter name=jenkins --format '{{ "{{" }}.Name{{ "}}" }}'
       register: existing_jenkins
@@ -49,32 +50,44 @@
 
     # ----------------------------------------
     # Resource Validation
-    # ----------------------------------------
+    # ========================================
+
+    - name: Assert that memory facts exist
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['memtotal_mb'] is defined
+        fail_msg: "Memory facts are not available. Cannot validate memory."
+        success_msg: "Memory facts available."
+
+    - name: Set available memory fact
+      ansible.builtin.set_fact:
+        available_memory_mb: "{{ ansible_facts['memfree_mb'] | int }}"
+
     - name: Ensure sufficient available memory
       ansible.builtin.assert:
         that:
-          - ansible_mem.free_mb >= min_memory_mb
-        success_msg: "✔ Enough memory available ({{ ansible_mem.free_mb }}MB)"
-        fail_msg: "❌ Insufficient memory ({{ ansible_mem.free_mb }}MB), at least {{ min_memory_mb }}MB is needed."
+          - available_memory_mb >= min_memory_mb
+        fail_msg: "❌ Insufficient memory. Jenkins requires >= {{ min_memory_mb }}MB. Available: {{ available_memory_mb }}MB"
+        success_msg: "✔ Sufficient memory available: {{ available_memory_mb }}MB"
 
-    - name: Determine free space on Docker data mount
+    - name: Set free disk bytes for Docker root
       ansible.builtin.set_fact:
-        docker_mount: "{{ ansible_mounts | selectattr('mount','equalto','/var/lib/docker') | first }}"
+        free_disk_bytes: "{{ ansible_mounts | selectattr('mount','equalto','/var/lib/docker') | map(attribute='size_available') | first | default(0) }}"
 
-    - name: Check free disk space in GiB for Docker root
+    - name: Convert free disk bytes to GiB
       ansible.builtin.set_fact:
-        free_disk_gib: "{{ (docker_mount.size_available | float) / (1024 ** 3) }}"
+        free_disk_gib: "{{ (free_disk_bytes | float) / (1024**3) }}"
 
-    - name: Assert free disk space is sufficient
+    - name: Assert free disk space
       ansible.builtin.assert:
         that:
           - free_disk_gib >= min_disk_gib
-        success_msg: "✔ Disk space check passed ({{ free_disk_gib | round(2) }}GiB free)"
-        fail_msg: "❌ Free disk space is low ({{ free_disk_gib | round(2) }}GiB). At least {{ min_disk_gib }}GiB is recommended."
+        fail_msg: "❌ Insufficient disk space ({{ free_disk_gib | round(2) }}GiB). Need >= {{ min_disk_gib }}GiB"
+        success_msg: "✔ Sufficient disk space: {{ free_disk_gib | round(2) }}GiB free"
 
-    # ----------------------------------------
-    # Deploy Stack Directory & Config
-    # ----------------------------------------
+    # ========================================
+    # Prepare Deployment Files
+    # ========================================
     - name: Ensure deployment directory exists
       ansible.builtin.file:
         path: /opt/jenkins
@@ -90,7 +103,7 @@
 
     # ----------------------------------------
     # Deploy Jenkins Stack
-    # ----------------------------------------
+    # ========================================
     - name: Deploy Jenkins stack to Docker Swarm
       ansible.builtin.command:
         cmd: docker stack deploy -c docker-compose.yml jenkins
@@ -102,25 +115,24 @@
       ansible.builtin.debug:
         var: jenkins_deploy.stdout_lines
 
-    # ----------------------------------------
+    # ========================================
     # Wait for Jenkins Services
-    # ----------------------------------------
+    # ========================================
     - name: Wait for Jenkins service to appear
       ansible.builtin.wait_for:
         timeout: 60
         state: started
-      register: wait_for_jenkins
 
-    - name: Verify Jenkins service running with replicas
+    - name: Verify Jenkins replicas running
       ansible.builtin.command: docker service ls --filter "name=jenkins_jenkins" --format '{{ "{{" }}.Replicas{{ "}}" }}'
       register: jenkins_replicas
       retries: 15
       delay: 5
       until: jenkins_replicas.stdout is search("*/")
 
-    # ----------------------------------------
-    # Check Jenkins HTTP Endpoint
-    # ----------------------------------------
+    # ========================================
+    # HTTP Check for Jenkins
+    # ========================================
     - name: Wait until Jenkins HTTP endpoint responds
       ansible.builtin.uri:
         url: "http://localhost:{{ jenkins_port }}/login"
@@ -136,30 +148,38 @@
       ansible.builtin.debug:
         msg: "Jenkins HTTP status: {{ jenkins_http.status | default('unreachable') }}"
 
-    # ----------------------------------------
+    # ========================================
     # Collect Initial Admin Password
-    # ----------------------------------------
+    # ========================================
     - name: Get Jenkins container ID
-      ansible.builtin.command: docker ps -q -f name=jenkins_jenkins
+      ansible.builtin.command:
+        cmd: docker ps -q -f name=jenkins_jenkins
       register: container_id
       changed_when: false
+      failed_when: false
 
     - name: Retrieve initial admin password if available
-      ansible.builtin.command: docker exec {{ container_id.stdout }} cat /var/jenkins_home/secrets/initialAdminPassword
+      ansible.builtin.command:
+        cmd: docker exec {{ container_id.stdout }} cat /var/jenkins_home/secrets/initialAdminPassword
       register: jenkins_admin_password
       when: container_id.stdout != ""
       changed_when: false
       failed_when: false
 
-    # ----------------------------------------
-    # Output Summary
-    # ----------------------------------------
-    - name: Display finish summary
+    # ========================================
+    # Display Summary
+    # ========================================
+    - name: Display Jenkins deployment summary
       ansible.builtin.debug:
         msg:
-          - "✔ Jenkins is deployed!"
+          - "========================================="
+          - "✔ Jenkins Deployment Complete!"
+          - "-----------------------------------------"
           - "HTTP Status: {{ jenkins_http.status | default('unreachable') }}"
-          - "Free memory (MB): {{ ansible_mem.free_mb }}"
-          - "Free disk space (GiB): {{ free_disk_gib | round(2) }}"
-          - "Initial Admin Password: {{ jenkins_admin_password.stdout | default('not yet available') }}"
-          - "Access Jenkins at: http://{{ ansible_facts.default_ipv4.address }}:{{ jenkins_port }}"
+          - "Memory (MB): {{ available_memory_mb }}"
+          - "Disk (GiB): {{ free_disk_gib | round(2) }}"
+          - "Jenkins Access: http://{{ ansible_facts.default_ipv4.address }}:{{ jenkins_port }}"
+          - "Agent Port: {{ jenkins_agent_port }}"
+          - "Initial Admin Password: {{ jenkins_admin_password.stdout | default('NOT AVAILABLE YET') }}"
+          - "Saved to: /opt/jenkins/initial_admin_password.txt"
+          - "========================================="
