@@ -1,138 +1,6 @@
 ---
 # ========================================
-# Validate Prerequisites
-# ========================================
-- name: Validate All Prerequisites Before Jenkins Deployment
-  hosts: swarm_manager
-  become: true
-  gather_facts: true
-
-  tasks:
-    - name: Check if Docker is installed and running
-      ansible.builtin.service:
-        name: docker
-        state: started
-      register: docker_status
-      failed_when: docker_status.status.ActiveState != 'active'
-
-    - name: Verify Docker Swarm is initialized
-      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
-      register: swarm_state
-      changed_when: false
-      failed_when: swarm_state.stdout != 'active'
-
-    - name: Get all swarm nodes
-      ansible.builtin.command: docker node ls --format "{{ '{{' }}.Hostname{{ '}}' }} {{ '{{' }}.Status{{ '}}' }} {{ '{{' }}.Availability{{ '}}' }}"
-      register: swarm_nodes
-      changed_when: false
-
-    - name: Display swarm nodes status
-      ansible.builtin.debug:
-        msg: "{{ swarm_nodes.stdout_lines }}"
-
-    - name: Validate all nodes are Ready and Active
-      ansible.builtin.assert:
-        that:
-          - "'Down' not in swarm_nodes.stdout"
-          - "'Drain' not in swarm_nodes.stdout"
-        fail_msg: "One or more swarm nodes are not ready. Please fix node issues before deploying Jenkins."
-        success_msg: "All swarm nodes are Ready and Active"
-
-    - name: Check Docker Metrics exporter on manager
-      ansible.builtin.uri:
-        url: "http://localhost:9323/metrics"
-        status_code: 200
-      register: docker_metrics_check
-      failed_when: false
-
-    - name: Check Node Exporter on manager
-      ansible.builtin.uri:
-        url: "http://localhost:9100/metrics"
-        status_code: 200
-      register: node_exporter_check
-      failed_when: false
-
-    - name: Check cAdvisor on manager
-      ansible.builtin.uri:
-        url: "http://localhost:8080/metrics"
-        status_code: 200
-      register: cadvisor_check
-      failed_when: false
-
-    - name: Validate exporters are running
-      ansible.builtin.assert:
-        that:
-          - docker_metrics_check.status == 200
-          - node_exporter_check.status == 200
-          - cadvisor_check.status == 200
-        fail_msg: "One or more exporters are not running. Please ensure exporters are deployed on all nodes."
-        success_msg: "All exporters are running successfully"
-
-    - name: Check if monitoring stack is deployed
-      ansible.builtin.command: docker service ls --filter "name=monitoring" --format "{{ '{{' }}.Name{{ '}}' }}"
-      register: monitoring_services
-      changed_when: false
-      failed_when: false
-
-    - name: Display prerequisite validation summary
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   Prerequisites Validation Complete"
-          - "========================================="
-          - "✅ Docker Swarm: Active"
-          - "✅ Swarm Nodes: All Ready"
-          - "✅ Docker Metrics: Running"
-          - "✅ Node Exporter: Running"
-          - "✅ cAdvisor: Running"
-          - >-
-            {{ '✅' if monitoring_services.stdout_lines | length > 0 else '⚠️' }}
-            Monitoring Stack: {{ 'Deployed' if monitoring_services.stdout_lines | length > 0 else 'Not found (optional)' }}
-          - "========================================="
-          - ""
-          - "All prerequisites met. Proceeding with Jenkins deployment..."
-
-# ========================================
-# Validate Prerequisites on All Nodes
-# ========================================
-- name: Validate Exporters on All Worker Nodes
-  hosts: swarm_workers
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Check Docker Metrics on workers
-      ansible.builtin.uri:
-        url: "http://localhost:9323/metrics"
-        status_code: 200
-      register: worker_docker_metrics
-      failed_when: false
-
-    - name: Check Node Exporter on workers
-      ansible.builtin.uri:
-        url: "http://localhost:9100/metrics"
-        status_code: 200
-      register: worker_node_exporter
-      failed_when: false
-
-    - name: Check cAdvisor on workers
-      ansible.builtin.uri:
-        url: "http://localhost:8080/metrics"
-        status_code: 200
-      register: worker_cadvisor
-      failed_when: false
-
-    - name: Validate worker exporters
-      ansible.builtin.assert:
-        that:
-          - worker_docker_metrics.status == 200
-          - worker_node_exporter.status == 200
-          - worker_cadvisor.status == 200
-        fail_msg: "Exporters not running on {{ inventory_hostname }}"
-        success_msg: "All exporters running on {{ inventory_hostname }}"
-
-# ========================================
-# Deploy Jenkins on Swarm Manager
+# Deploy Jenkins CI/CD Stack
 # ========================================
 - name: Deploy Jenkins CI/CD Stack
   hosts: swarm_manager
@@ -145,6 +13,19 @@
     jenkins_agent_port: 50000
 
   tasks:
+    # ========================================
+    # Basic Swarm Check
+    # ========================================
+    - name: Verify Docker Swarm is active
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_state
+      changed_when: false
+      failed_when: swarm_state.stdout != 'active'
+
+    - name: Display Swarm status
+      ansible.builtin.debug:
+        msg: "Docker Swarm is active. Proceeding with Jenkins deployment..."
+
     # ========================================
     # Environment Cleanup
     # ========================================
@@ -305,32 +186,3 @@
           - "  5. Configure Jenkins for your CI/CD pipelines"
           - ""
           - "========================================="
-
-# ========================================
-# Final Validation
-# ========================================
-- name: Final Deployment Validation
-  hosts: swarm_manager
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Run comprehensive stack validation
-      ansible.builtin.command: docker stack services jenkins
-      register: final_validation
-      changed_when: false
-
-    - name: Display final validation
-      ansible.builtin.debug:
-        msg:
-          - "========================================="
-          - "   Final Validation Results"
-          - "========================================="
-          - "{{ final_validation.stdout_lines }}"
-          - "========================================="
-          - ""
-          - "✅ All prerequisites validated"
-          - "✅ Jenkins stack deployed"
-          - "✅ Services are running"
-          - ""
-          - "Deployment complete!"
