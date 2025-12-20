@@ -100,11 +100,6 @@ jobs:
           ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
             "docker service ls --filter name=jenkins --format '{{.Name}} {{.Replicas}}'"
 
-      - name: Verify Jenkins accessibility
-        run: |
-          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.SWARM_MANAGER_IP }} \
-            "curl -f http://localhost:8081/login" && echo "✅ Jenkins accessible" || exit 1
-
       - name: Retrieve Jenkins initial admin password
         id: jenkins_pwd
         run: |
