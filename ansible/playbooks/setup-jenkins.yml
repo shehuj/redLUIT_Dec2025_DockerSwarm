@@ -1,0 +1,336 @@
+---
+# ========================================
+# Validate Prerequisites
+# ========================================
+- name: Validate All Prerequisites Before Jenkins Deployment
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check if Docker is installed and running
+      ansible.builtin.service:
+        name: docker
+        state: started
+      register: docker_status
+      failed_when: docker_status.status.ActiveState != 'active'
+
+    - name: Verify Docker Swarm is initialized
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_state
+      changed_when: false
+      failed_when: swarm_state.stdout != 'active'
+
+    - name: Get all swarm nodes
+      ansible.builtin.command: docker node ls --format "{{ '{{' }}.Hostname{{ '}}' }} {{ '{{' }}.Status{{ '}}' }} {{ '{{' }}.Availability{{ '}}' }}"
+      register: swarm_nodes
+      changed_when: false
+
+    - name: Display swarm nodes status
+      ansible.builtin.debug:
+        msg: "{{ swarm_nodes.stdout_lines }}"
+
+    - name: Validate all nodes are Ready and Active
+      ansible.builtin.assert:
+        that:
+          - "'Down' not in swarm_nodes.stdout"
+          - "'Drain' not in swarm_nodes.stdout"
+        fail_msg: "One or more swarm nodes are not ready. Please fix node issues before deploying Jenkins."
+        success_msg: "All swarm nodes are Ready and Active"
+
+    - name: Check Docker Metrics exporter on manager
+      ansible.builtin.uri:
+        url: "http://localhost:9323/metrics"
+        status_code: 200
+      register: docker_metrics_check
+      failed_when: false
+
+    - name: Check Node Exporter on manager
+      ansible.builtin.uri:
+        url: "http://localhost:9100/metrics"
+        status_code: 200
+      register: node_exporter_check
+      failed_when: false
+
+    - name: Check cAdvisor on manager
+      ansible.builtin.uri:
+        url: "http://localhost:8080/metrics"
+        status_code: 200
+      register: cadvisor_check
+      failed_when: false
+
+    - name: Validate exporters are running
+      ansible.builtin.assert:
+        that:
+          - docker_metrics_check.status == 200
+          - node_exporter_check.status == 200
+          - cadvisor_check.status == 200
+        fail_msg: "One or more exporters are not running. Please ensure exporters are deployed on all nodes."
+        success_msg: "All exporters are running successfully"
+
+    - name: Check if monitoring stack is deployed
+      ansible.builtin.command: docker service ls --filter "name=monitoring" --format "{{ '{{' }}.Name{{ '}}' }}"
+      register: monitoring_services
+      changed_when: false
+      failed_when: false
+
+    - name: Display prerequisite validation summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Prerequisites Validation Complete"
+          - "========================================="
+          - "✅ Docker Swarm: Active"
+          - "✅ Swarm Nodes: All Ready"
+          - "✅ Docker Metrics: Running"
+          - "✅ Node Exporter: Running"
+          - "✅ cAdvisor: Running"
+          - >-
+            {{ '✅' if monitoring_services.stdout_lines | length > 0 else '⚠️' }}
+            Monitoring Stack: {{ 'Deployed' if monitoring_services.stdout_lines | length > 0 else 'Not found (optional)' }}
+          - "========================================="
+          - ""
+          - "All prerequisites met. Proceeding with Jenkins deployment..."
+
+# ========================================
+# Validate Prerequisites on All Nodes
+# ========================================
+- name: Validate Exporters on All Worker Nodes
+  hosts: swarm_workers
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check Docker Metrics on workers
+      ansible.builtin.uri:
+        url: "http://localhost:9323/metrics"
+        status_code: 200
+      register: worker_docker_metrics
+      failed_when: false
+
+    - name: Check Node Exporter on workers
+      ansible.builtin.uri:
+        url: "http://localhost:9100/metrics"
+        status_code: 200
+      register: worker_node_exporter
+      failed_when: false
+
+    - name: Check cAdvisor on workers
+      ansible.builtin.uri:
+        url: "http://localhost:8080/metrics"
+        status_code: 200
+      register: worker_cadvisor
+      failed_when: false
+
+    - name: Validate worker exporters
+      ansible.builtin.assert:
+        that:
+          - worker_docker_metrics.status == 200
+          - worker_node_exporter.status == 200
+          - worker_cadvisor.status == 200
+        fail_msg: "Exporters not running on {{ inventory_hostname }}"
+        success_msg: "All exporters running on {{ inventory_hostname }}"
+
+# ========================================
+# Deploy Jenkins on Swarm Manager
+# ========================================
+- name: Deploy Jenkins CI/CD Stack
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  vars:
+    jenkins_home: /var/jenkins_home
+    jenkins_port: 8080
+    jenkins_agent_port: 50000
+
+  tasks:
+    # ========================================
+    # Environment Cleanup
+    # ========================================
+    - name: Check for existing Jenkins services
+      ansible.builtin.command: docker service ls --filter "name=jenkins" --format "{{ '{{' }}.Name{{ '}}' }}"
+      register: existing_jenkins
+      changed_when: false
+      failed_when: false
+
+    - name: Display existing Jenkins services
+      ansible.builtin.debug:
+        msg: "Found existing Jenkins services: {{ existing_jenkins.stdout_lines }}"
+      when: existing_jenkins.stdout_lines | length > 0
+
+    - name: Remove existing Jenkins stack
+      ansible.builtin.command: docker stack rm jenkins
+      when: existing_jenkins.stdout_lines | length > 0
+      register: stack_removed
+      failed_when: false
+
+    - name: Wait for Jenkins stack removal to complete
+      ansible.builtin.pause:
+        seconds: 15
+      when: stack_removed.changed
+
+    - name: Prune unused volumes
+      ansible.builtin.command: docker volume prune -f
+      register: volume_prune
+      changed_when: "'deleted' in volume_prune.stdout"
+
+    # ========================================
+    # Setup Jenkins Directories and Configs
+    # ========================================
+    - name: Create Jenkins deployment directory
+      ansible.builtin.file:
+        path: /opt/jenkins
+        state: directory
+        mode: '0755'
+
+    - name: Create Jenkins data directory
+      ansible.builtin.file:
+        path: "{{ jenkins_home }}"
+        state: directory
+        mode: '0755'
+        owner: 1000
+        group: 1000
+
+    - name: Copy Jenkins stack file
+      ansible.builtin.copy:
+        src: "../../jenkins-stack.yml"
+        dest: /opt/jenkins/docker-compose.yml
+        mode: '0644'
+
+    # ========================================
+    # Deploy Jenkins Stack
+    # ========================================
+    - name: Deploy Jenkins stack to swarm
+      ansible.builtin.command:
+        cmd: docker stack deploy -c docker-compose.yml jenkins
+        chdir: /opt/jenkins
+      register: jenkins_deploy
+      changed_when: "'Creating service' in jenkins_deploy.stdout or 'Updating service' in jenkins_deploy.stdout"
+
+    - name: Wait for Jenkins service to start
+      ansible.builtin.pause:
+        seconds: 30
+        prompt: "Waiting for Jenkins to initialize..."
+
+    - name: Get Jenkins service status
+      ansible.builtin.command: docker service ls --filter "name=jenkins" --format "{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}.Replicas{{ '}}' }}"
+      register: jenkins_status
+      changed_when: false
+
+    - name: Display Jenkins service status
+      ansible.builtin.debug:
+        msg: "{{ jenkins_status.stdout_lines }}"
+
+    # ========================================
+    # Validate Jenkins Deployment
+    # ========================================
+    - name: Wait for Jenkins to be ready
+      ansible.builtin.uri:
+        url: "http://localhost:{{ jenkins_port }}/login"
+        status_code: 200
+      register: jenkins_ready
+      until: jenkins_ready.status == 200
+      retries: 30
+      delay: 10
+      failed_when: false
+
+    - name: Check if Jenkins is accessible
+      ansible.builtin.assert:
+        that:
+          - jenkins_ready.status == 200
+        fail_msg: "Jenkins is not accessible. Please check the logs: docker service logs jenkins_jenkins"
+        success_msg: "Jenkins is accessible and ready"
+
+    - name: Get Jenkins initial admin password
+      ansible.builtin.command: docker exec $(docker ps -q -f name=jenkins_jenkins) cat /var/jenkins_home/secrets/initialAdminPassword
+      register: jenkins_password
+      changed_when: false
+      failed_when: false
+
+    - name: Get Jenkins container logs (last 20 lines)
+      ansible.builtin.command: docker service logs --tail 20 jenkins_jenkins
+      register: jenkins_logs
+      changed_when: false
+      failed_when: false
+
+    # ========================================
+    # Validate Swarm-wide Deployment
+    # ========================================
+    - name: Get Jenkins service placement
+      ansible.builtin.command: docker service ps jenkins_jenkins --format "{{ '{{' }}.Node{{ '}}' }} {{ '{{' }}.CurrentState{{ '}}' }}"
+      register: jenkins_placement
+      changed_when: false
+
+    - name: Display Jenkins placement across cluster
+      ansible.builtin.debug:
+        msg: "{{ jenkins_placement.stdout_lines }}"
+
+    - name: Verify Jenkins service is running
+      ansible.builtin.command:
+        cmd: docker service inspect jenkins_jenkins --format "{{ '{{' }}.Spec.Name{{ '}}' }}"
+      register: jenkins_inspect
+      changed_when: false
+
+    # ========================================
+    # Display Access Information
+    # ========================================
+    - name: Display Jenkins access information
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   🚀 Jenkins CI/CD Deployed Successfully!"
+          - "========================================="
+          - ""
+          - "Access Information:"
+          - "  Jenkins URL: http://{{ ansible_facts.default_ipv4.address }}:{{ jenkins_port }}"
+          - "  Agent Port: {{ jenkins_agent_port }}"
+          - ""
+          - "Initial Admin Password:"
+          - >-
+            {{ jenkins_password.stdout if jenkins_password.rc == 0 else
+            'Run: docker exec $(docker ps -q -f name=jenkins) cat /var/jenkins_home/secrets/initialAdminPassword' }}
+          - ""
+          - "Service Status:"
+          - "  {{ jenkins_inspect.stdout }}"
+          - ""
+          - "Deployed on Node:"
+          - "  {{ jenkins_placement.stdout_lines[0] if jenkins_placement.stdout_lines | length > 0 else 'Unknown' }}"
+          - ""
+          - "Next Steps:"
+          - "  1. Access Jenkins at the URL above"
+          - "  2. Use the initial admin password to unlock Jenkins"
+          - "  3. Install suggested plugins"
+          - "  4. Create your first admin user"
+          - "  5. Configure Jenkins for your CI/CD pipelines"
+          - ""
+          - "========================================="
+
+# ========================================
+# Final Validation
+# ========================================
+- name: Final Deployment Validation
+  hosts: swarm_manager
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Run comprehensive stack validation
+      ansible.builtin.command: docker stack services jenkins
+      register: final_validation
+      changed_when: false
+
+    - name: Display final validation
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Final Validation Results"
+          - "========================================="
+          - "{{ final_validation.stdout_lines }}"
+          - "========================================="
+          - ""
+          - "✅ All prerequisites validated"
+          - "✅ Jenkins stack deployed"
+          - "✅ Services are running"
+          - ""
+          - "Deployment complete!"

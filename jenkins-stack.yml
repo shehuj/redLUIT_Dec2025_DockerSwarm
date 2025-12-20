@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - JENKINS_OPTS=--prefix=/jenkins
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=true
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+      labels:
+        - "com.docker.stack.namespace=jenkins"
+        - "com.jenkins.service=master"
+    networks:
+      - jenkins_network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # Jenkins Agent (optional - for distributed builds)
+  jenkins-agent:
+    image: jenkins/inbound-agent:latest
+    environment:
+      - JENKINS_URL=http://jenkins:8080
+      - JENKINS_AGENT_NAME=swarm-agent-1
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.role == worker
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - jenkins_network
+    depends_on:
+      - jenkins
+
+networks:
+  jenkins_network:
+    driver: overlay
+    attachable: true
+    labels:
+      - "com.docker.stack.namespace=jenkins"
+
+volumes:
+  jenkins_data:
+    driver: local
+    labels:
+      - "com.docker.stack.namespace=jenkins"
+      - "com.jenkins.volume=data"
