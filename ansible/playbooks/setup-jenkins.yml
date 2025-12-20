@@ -85,7 +85,9 @@
           - "✅ Docker Metrics: Running"
           - "✅ Node Exporter: Running"
           - "✅ cAdvisor: Running"
-          - "{{ '✅' if monitoring_services.stdout_lines | length > 0 else '⚠️' }} Monitoring Stack: {{ 'Deployed' if monitoring_services.stdout_lines | length > 0 else 'Not found (optional)' }}"
+          - >-
+            {{ '✅' if monitoring_services.stdout_lines | length > 0 else '⚠️' }}
+            Monitoring Stack: {{ 'Deployed' if monitoring_services.stdout_lines | length > 0 else 'Not found (optional)' }}
           - "========================================="
           - ""
           - "All prerequisites met. Proceeding with Jenkins deployment..."
@@ -265,7 +267,8 @@
         msg: "{{ jenkins_placement.stdout_lines }}"
 
     - name: Verify Jenkins service is running
-      ansible.builtin.command: docker service inspect jenkins_jenkins --format "{{ '{{' }}.Spec.Name{{ '}}' }} - Replicas: {{ '{{' }}.Spec.Mode.Replicated.Replicas{{ '}}' }}"
+      ansible.builtin.command:
+        cmd: docker service inspect jenkins_jenkins --format "{{ '{{' }}.Spec.Name{{ '}}' }}"
       register: jenkins_inspect
       changed_when: false
 
@@ -284,7 +287,9 @@
           - "  Agent Port: {{ jenkins_agent_port }}"
           - ""
           - "Initial Admin Password:"
-          - "  {{ jenkins_password.stdout if jenkins_password.rc == 0 else 'Run: docker exec $(docker ps -q -f name=jenkins) cat /var/jenkins_home/secrets/initialAdminPassword' }}"
+          - >-
+            {{ jenkins_password.stdout if jenkins_password.rc == 0 else
+            'Run: docker exec $(docker ps -q -f name=jenkins) cat /var/jenkins_home/secrets/initialAdminPassword' }}
           - ""
           - "Service Status:"
           - "  {{ jenkins_inspect.stdout }}"
