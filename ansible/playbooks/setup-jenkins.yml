@@ -163,8 +163,7 @@
       when: container_id.stdout != ""
       changed_when: false
       failed_when: false
-      
+
     - name: Display Jenkins initial admin password
       ansible.builtin.debug:
         msg: "Jenkins Initial Admin Password: {{ jenkins_admin_password.stdout }}"
-      when: jenkins_admin_password is defined and jenkins_admin_password.stdout != ""
