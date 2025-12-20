@@ -125,7 +125,8 @@
       register: jenkins_replicas
       retries: 15
       delay: 5
-      until: jenkins_replicas.stdout is search("*/")
+      until: jenkins_replicas.stdout is search("^[1-9]/[1-9]")
+      changed_when: false
 
     # ========================================
     # HTTP Check for Jenkins
