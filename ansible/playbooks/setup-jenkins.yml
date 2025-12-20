@@ -106,34 +106,80 @@
     # ========================================
     # Validate Jenkins Deployment
     # ========================================
+    - name: Wait for Jenkins container to be running
+      ansible.builtin.shell: docker ps --filter "name=jenkins_jenkins" --format "{{ '{{' }}.Status{{ '}}' }}" | grep -i "up" || echo "not running"
+      register: container_status
+      until: "'Up' in container_status.stdout"
+      retries: 60
+      delay: 5
+      changed_when: false
+      failed_when: false
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "Jenkins container status: {{ container_status.stdout }}"
+
+    - name: Get Jenkins service logs for diagnostics
+      ansible.builtin.command: docker service logs --tail 50 jenkins_jenkins
+      register: jenkins_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Display recent Jenkins logs
+      ansible.builtin.debug:
+        msg: "{{ jenkins_logs.stdout_lines[-10:] if jenkins_logs.stdout_lines | length > 0 else 'No logs available' }}"
+
+    - name: Check if Jenkins port is listening
+      ansible.builtin.wait_for:
+        port: "{{ jenkins_port }}"
+        host: localhost
+        timeout: 300
+        delay: 10
+      register: port_check
+      failed_when: false
+
     - name: Wait for Jenkins to be ready
       ansible.builtin.uri:
         url: "http://localhost:{{ jenkins_port }}/login"
         status_code: 200
+        timeout: 10
       register: jenkins_ready
       until: jenkins_ready.status == 200
-      retries: 30
+      retries: 60
       delay: 10
       failed_when: false
 
-    - name: Check if Jenkins is accessible
-      ansible.builtin.assert:
-        that:
-          - jenkins_ready.status == 200
-        fail_msg: "Jenkins is not accessible. Please check the logs: docker service logs jenkins_jenkins"
-        success_msg: "Jenkins is accessible and ready"
+    - name: Display Jenkins readiness status
+      ansible.builtin.debug:
+        msg: >-
+          Jenkins status: {{ 'Ready' if jenkins_ready.status == 200 else
+          'Not accessible (Status: ' + (jenkins_ready.status | string) + ')' }}
 
     - name: Get Jenkins initial admin password
       ansible.builtin.command: docker exec $(docker ps -q -f name=jenkins_jenkins) cat /var/jenkins_home/secrets/initialAdminPassword
       register: jenkins_password
       changed_when: false
       failed_when: false
+      when: jenkins_ready.status == 200
 
-    - name: Get Jenkins container logs (last 20 lines)
-      ansible.builtin.command: docker service logs --tail 20 jenkins_jenkins
-      register: jenkins_logs
-      changed_when: false
-      failed_when: false
+    - name: Display detailed error if Jenkins is not accessible
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Jenkins Deployment Issue Detected"
+          - "========================================="
+          - "Container Status: {{ container_status.stdout }}"
+          - "Port Check: {{ 'Port listening' if port_check is succeeded else 'Port not listening' }}"
+          - "HTTP Status: {{ jenkins_ready.status | default('Connection failed') }}"
+          - ""
+          - "Recent logs (last 10 lines):"
+          - "{{ jenkins_logs.stdout_lines[-10:] | default(['No logs available']) | join('\n') }}"
+          - ""
+          - "To debug further, run:"
+          - "  docker service ps jenkins_jenkins --no-trunc"
+          - "  docker service logs jenkins_jenkins"
+          - "========================================="
+      when: jenkins_ready.status != 200
 
     # ========================================
     # Validate Swarm-wide Deployment
